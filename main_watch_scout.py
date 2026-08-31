@@ -19,32 +19,32 @@ EU_COUNTRY_MAP = {
 }
 
 TARGET_REFERENCES = {
-    "Rolex Datejust 41 (126333)": {
+    "Rolex Datejust 41 (126333) Steel&Gold flutè": {
         "slug": "rolex/ref-126333.htm",
         "query": "126333",
         "market_price": 14000
     },
-    "Rolex Datejust 41 (126334)": {
+    "Rolex Datejust 41 (126334) Steel flutè": {
         "slug": "rolex/ref-126334.htm",
         "query": "126334",
         "market_price": 12400
     },
-    "Rolex Datejust 41 (126300)": {
+    "Rolex Datejust 41 (126300) Steel smooth": {
         "slug": "rolex/ref-126300.htm",
         "query": "126300",
         "market_price": 9300
     },
-    "Cartier Santos Medium (WSSA0029)": {
+    "Cartier Santos Medium (WSSA0029) 35mm": {
         "slug": "cartier/ref-wssa0029.htm",
         "query": "WSSA0029",
         "market_price": 6500
     },
-    "Cartier Santos 100 (2878)": {
+    "Cartier Santos 100 (2878) 33mm": {
         "slug": "cartier/ref-2878.htm",
         "query": "Cartier 2878",
         "market_price": 3700
     },
-    "Tudor Black Bay (79220R)": {
+    "Tudor Black Bay (79220R) Smiley": {
         "slug": "tudor/ref-79220r.htm",
         "query": "79220R",
         "market_price": 3500
@@ -373,7 +373,7 @@ if __name__ == "__main__":
                     f"{idx:02d}. [{item['piattaforma']}] {item['modello']} | "
                     f"Prezzo: {item['prezzo_str']} | Paese: {item['paese']} | "
                     f"Venditore: {item['tipo_venditore']} | Anno: {item['anno']} | "
-                    f"Quadrante: {item['quadrante']} | Dotazione: {item['dotazione']} | Link: {item['link']}"
+                    f"Quadrante: {item['quadrante']} | Dotazione: {item['dotazione']} | \n        Link: {item['link']}"
                 )
         else:
             print("Nessuna offerta trovata per questa referenza.")
