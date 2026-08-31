@@ -2,8 +2,10 @@ import re
 import json
 import time
 import random
+import urllib.parse
 from curl_cffi import requests
 from bs4 import BeautifulSoup
+from playwright.sync_api import sync_playwright
 
 # Mappatura completa dei Paesi membri dell'Unione Europea
 EU_COUNTRY_MAP = {
@@ -66,10 +68,9 @@ HEADERS = {
 }
 
 
-# --- FUNZIONI DI FORMATTAZIONE E ESTRAZIONE ---
+# --- FUNZIONI DI FORMATTAZIONE E PARSING METADATI ---
 
 def calculate_discount_format(price_val, market_price):
-    """Calcola la percentuale di sconto/maggiorazione rispetto alla quotazione di mercato."""
     if not price_val or not market_price:
         return f"€ {price_val:,.0f}".replace(",", ".")
 
@@ -85,7 +86,6 @@ def calculate_discount_format(price_val, market_price):
 
 
 def extract_country_name(country_code_or_text):
-    """Estrae e mappa il Paese reale del venditore."""
     code = str(country_code_or_text).upper().strip()
     if code in EU_COUNTRY_MAP:
         return EU_COUNTRY_MAP[code]
@@ -105,20 +105,10 @@ def extract_year(text):
 def extract_dial_color(text):
     text_lower = str(text).lower()
     colors = {
-        "wimbledon": "Wimbledon",
-        "mint": "Mint Green",
-        "verde": "Verde",
-        "blu": "Blu",
-        "blue": "Blu",
-        "nero": "Nero",
-        "black": "Nero",
-        "bianco": "Bianco",
-        "white": "Bianco",
-        "grigio": "Grigio / Rhodium",
-        "rhodium": "Grigio / Rhodium",
-        "silver": "Argenté",
-        "argenté": "Argenté",
-        "champagne": "Champagne"
+        "wimbledon": "Wimbledon", "mint": "Mint Green", "verde": "Verde",
+        "blu": "Blu", "blue": "Blu", "nero": "Nero", "black": "Nero",
+        "bianco": "Bianco", "white": "Bianco", "grigio": "Grigio / Rhodium",
+        "rhodium": "Grigio / Rhodium", "silver": "Argenté", "champagne": "Champagne"
     }
     for key, val in colors.items():
         if key in text_lower:
@@ -142,7 +132,7 @@ def extract_scope_of_delivery(scope_code_or_text):
 
 def extract_seller_type(seller_info):
     text = str(seller_info).lower()
-    if "true" in text or "professional" in text or "merchant" in text or "commerciante" in text or "pro" in text:
+    if "true" in text or "professional" in text or "merchant" in text or "commerciante" in text or "pro" in text or "company" in text:
         return "Professionista"
     return "Privato"
 
@@ -161,9 +151,8 @@ def fetch_chrono24(session, ref_name, info):
             return listings, market_price
 
         soup = BeautifulSoup(response.text, "html.parser")
-
-        # 1. Parsing JSON __NEXT_DATA__
         extracted_market_price = market_price
+
         script_json = soup.find("script", id="__NEXT_DATA__")
         if script_json:
             try:
@@ -171,7 +160,6 @@ def fetch_chrono24(session, ref_name, info):
                 page_props = data.get("props", {}).get("pageProps", {})
                 search_results = page_props.get("searchResults", {})
 
-                # Estrazione dinamica del prezzo medio se disponibile da piattaforma
                 dynamic_avg = search_results.get("averagePrice") or page_props.get("marketPrice")
                 if dynamic_avg and float(dynamic_avg) > 0:
                     extracted_market_price = float(dynamic_avg)
@@ -187,19 +175,10 @@ def fetch_chrono24(session, ref_name, info):
                     if price_val > 500 and url_path:
                         link = f"https://www.chrono24.it{url_path}" if url_path.startswith("/") else url_path
                         seller_obj = item.get("seller", {})
-                        raw_country = (
-                                seller_obj.get("country") or
-                                item.get("country") or
-                                seller_obj.get("location", {}).get("country") or
-                                item.get("shippingCountry")
-                        )
+                        raw_country = seller_obj.get("country") or item.get("country") or item.get("shippingCountry")
                         country = extract_country_name(raw_country)
                         seller_type = extract_seller_type(
                             item.get("isProfessional") or seller_obj.get("isProfessional"))
-
-                        year = item.get("year") or extract_year(full_text)
-                        dial = item.get("dialColor") or extract_dial_color(full_text)
-                        scope = extract_scope_of_delivery(item.get("scopeOfDelivery", full_text))
 
                         listings.append({
                             "piattaforma": "Chrono24",
@@ -207,9 +186,9 @@ def fetch_chrono24(session, ref_name, info):
                             "prezzo_val": float(price_val),
                             "paese": country,
                             "tipo_venditore": seller_type,
-                            "anno": str(year),
-                            "quadrante": dial,
-                            "dotazione": scope,
+                            "anno": str(item.get("year") or extract_year(full_text)),
+                            "quadrante": item.get("dialColor") or extract_dial_color(full_text),
+                            "dotazione": extract_scope_of_delivery(item.get("scopeOfDelivery", full_text)),
                             "link": link
                         })
                 if listings:
@@ -217,19 +196,17 @@ def fetch_chrono24(session, ref_name, info):
             except Exception as e:
                 print(f"  [Chrono24 JSON Error]: {e}")
 
-        # 2. Parsing Fallback HTML
+        # Fallback HTML
         product_links = soup.find_all("a", href=re.compile(r"-id\d+\.htm"))
         seen_links = set()
 
         for link_tag in product_links:
             href = link_tag["href"]
             full_link = f"https://www.chrono24.it{href}" if href.startswith("/") else href
-            if full_link in seen_links:
-                continue
+            if full_link in seen_links: continue
 
             container = link_tag.find_parent(["div", "article"])
-            if not container:
-                continue
+            if not container: continue
 
             text_content = container.get_text(" ", strip=True)
             price_match = re.search(r"€\s?([\d\.]+)|([\d\.]+)\s?€", text_content)
@@ -237,21 +214,19 @@ def fetch_chrono24(session, ref_name, info):
             if price_match:
                 raw_price = price_match.group(1) or price_match.group(2)
                 clean_price = raw_price.replace(".", "")
-                if clean_price.isdigit():
-                    price_val = float(clean_price)
-                    if price_val > 500:
-                        seen_links.add(full_link)
-                        listings.append({
-                            "piattaforma": "Chrono24",
-                            "modello": ref_name,
-                            "prezzo_val": price_val,
-                            "paese": extract_country_name(text_content),
-                            "tipo_venditore": extract_seller_type(text_content),
-                            "anno": extract_year(text_content),
-                            "quadrante": extract_dial_color(text_content),
-                            "dotazione": extract_scope_of_delivery(text_content),
-                            "link": full_link
-                        })
+                if clean_price.isdigit() and float(clean_price) > 500:
+                    seen_links.add(full_link)
+                    listings.append({
+                        "piattaforma": "Chrono24",
+                        "modello": ref_name,
+                        "prezzo_val": float(clean_price),
+                        "paese": extract_country_name(text_content),
+                        "tipo_venditore": extract_seller_type(text_content),
+                        "anno": extract_year(text_content),
+                        "quadrante": extract_dial_color(text_content),
+                        "dotazione": extract_scope_of_delivery(text_content),
+                        "link": full_link
+                    })
 
     except Exception as e:
         print(f"  [Chrono24 Error] {ref_name}: {e}")
@@ -259,55 +234,164 @@ def fetch_chrono24(session, ref_name, info):
     return listings, extracted_market_price
 
 
-# --- INTEGRATORE SUBITO.IT ---
+# --- SCRAPER SUBITO.IT (Playwright con attesa nodo nascosto) ---
 
-def fetch_other_marketplaces(session, ref_name, info):
+def parse_subito_json_item(item, ref_name):
+    price_val = None
+    features = item.get("features", [])
+
+    if isinstance(features, list):
+        for feat in features:
+            if feat.get("uri") == "/price" or feat.get("name") == "price":
+                vals = feat.get("values", [])
+                if vals and isinstance(vals, list):
+                    price_val = vals[0].get("value")
+    elif isinstance(features, dict):
+        p_obj = features.get("/price", {})
+        vals = p_obj.get("values", [{}])
+        if vals:
+            price_val = vals[0].get("value")
+
+    if not price_val and item.get("price"):
+        price_val = item["price"].get("value") if isinstance(item["price"], dict) else item["price"]
+
+    if price_val:
+        try:
+            p_val = float(str(price_val).replace(".", "").replace(",", "."))
+            if p_val > 500:
+                url_item = item.get("urls", {}).get("default") or item.get("url") or ""
+                if not url_item: return None
+
+                full_text = f"{item.get('subject', '')} {item.get('body', '')}"
+                seller_type = "Professionista" if item.get("advertiser", {}).get("type") in ["company", "shop",
+                                                                                             "pro"] else "Privato"
+
+                return {
+                    "piattaforma": "Subito.it",
+                    "modello": ref_name,
+                    "prezzo_val": p_val,
+                    "paese": "Italia 🇮🇹",
+                    "tipo_venditore": seller_type,
+                    "anno": extract_year(full_text),
+                    "quadrante": extract_dial_color(full_text),
+                    "dotazione": extract_scope_of_delivery(full_text),
+                    "link": url_item
+                }
+        except ValueError:
+            pass
+    return None
+
+
+def fetch_subito_playwright(ref_name, info):
     results = []
-    query = info["query"]
+    query = urllib.parse.quote_plus(info["query"])
+    url = f"https://www.subito.it/annunci-italia/vendita/usato/?c=36&q={query}&order=price_asc"
 
-    headers_subito = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "it-IT,it;q=0.9",
-        "Origin": "https://www.subito.it",
-        "Referer": "https://www.subito.it/"
-    }
+    with sync_playwright() as p:
+        # 1. Bypass antidentificazione headless
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="it-IT",
+            timezone_id="Europe/Rome"
+        )
+        page = context.new_page()
 
-    try:
-        api_url = f"https://hades.subito.it/v1/search/items?q={query}&c=36&sort=price_asc&lim=15"
-        resp = session.get(api_url, headers=headers_subito, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json()
-            items = data.get("list", [])
-            for item in items:
-                features = item.get("features", {})
-                price_obj = features.get("/price", {})
-                price_val = price_obj.get("values", [{}])[0].get("value")
+        # Rimuove il flag navigator.webdriver per eludere i controlli anti-bot
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        """)
 
-                if price_val and float(price_val) > 500:
-                    p_val = float(price_val)
-                    subject = item.get("subject", "")
-                    body = item.get("body", "")
-                    full_text = f"{subject} {body}"
-                    url = item.get("urls", {}).get("default", "")
-                    advertiser = item.get("advertiser", {})
-                    seller_type = "Professionista" if advertiser.get("type") == "company" else "Privato"
+        # 2. Intercettazione diretta delle chiamate di rete JSON
+        def handle_response(response):
+            if "search/items" in response.url or "hades" in response.url:
+                try:
+                    data = response.json()
+                    items = data.get("list", []) or data.get("items", [])
+                    for item in items:
+                        parsed = parse_subito_json_item(item, ref_name)
+                        if parsed:
+                            results.append(parsed)
+                except Exception:
+                    pass
 
-                    results.append({
-                        "piattaforma": "Subito.it",
-                        "modello": ref_name,
-                        "prezzo_val": p_val,
-                        "paese": "Italia 🇮🇹",
-                        "tipo_venditore": seller_type,
-                        "anno": extract_year(full_text),
-                        "quadrante": extract_dial_color(full_text),
-                        "dotazione": extract_scope_of_delivery(full_text),
-                        "link": url
-                    })
-    except Exception as e:
-        print(f"  [Subito API Error] {ref_name}: {e}")
+        page.on("response", handle_response)
 
-    return results
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2000)
+
+            # Se l'intercettazione di rete non ha ancora catturato i dati, prova a leggere dal tag __NEXT_DATA__
+            if not results:
+                script_element = page.query_selector("#__NEXT_DATA__")
+                if script_element:
+                    content = script_element.inner_text()
+                    if content:
+                        data = json.loads(content)
+                        page_props = data.get("props", {}).get("pageProps", {})
+                        items = (
+                                page_props.get("initialState", {}).get("items", {}).get("list", []) or
+                                page_props.get("items", []) or
+                                page_props.get("searchResults", {}).get("items", [])
+                        )
+                        for item in items:
+                            parsed = parse_subito_json_item(item, ref_name)
+                            if parsed:
+                                results.append(parsed)
+
+            # 3. Fallback HTML se il JSON viene bloccato completamente
+            if not results:
+                cards = page.query_selector_all("div[class*='items__item']")
+                for card in cards:
+                    link_el = card.query_selector("a[class*='SmallCard-module_link']")
+                    price_el = card.query_selector("p[class*='price']")
+
+                    if link_el and price_el:
+                        link = link_el.get_attribute("href")
+                        price_text = price_el.inner_text()
+                        price_match = re.search(r"([\d\.]+)\s?€", price_text)
+
+                        if price_match and link:
+                            p_val = float(price_match.group(1).replace(".", ""))
+                            if p_val > 500:
+                                card_text = card.inner_text()
+                                results.append({
+                                    "piattaforma": "Subito.it",
+                                    "modello": ref_name,
+                                    "prezzo_val": p_val,
+                                    "paese": "Italia 🇮🇹",
+                                    "tipo_venditore": extract_seller_type(card_text),
+                                    "anno": extract_year(card_text),
+                                    "quadrante": extract_dial_color(card_text),
+                                    "dotazione": extract_scope_of_delivery(card_text),
+                                    "link": link
+                                })
+
+        except Exception as e:
+            print(f"  [Subito Playwright Error] Impossibile recuperare {ref_name}: {e}")
+        finally:
+            browser.close()
+
+    # Rimuove eventuali duplicati per lo stesso link
+    unique_results = []
+    seen = set()
+    for item in results:
+        if item["link"] not in seen:
+            seen.add(item["link"])
+            unique_results.append(item)
+
+    return unique_results
+
 
 
 # --- ESECUZIONE GLOBALE ON DEMAND ---
@@ -315,30 +399,28 @@ def fetch_other_marketplaces(session, ref_name, info):
 def run_watch_scanner():
     session = requests.Session(impersonate="chrome124")
 
+    # Warm-up della sessione per superare eventuali check TLS base
     try:
         session.get("https://www.chrono24.it", headers=HEADERS, timeout=10)
-        time.sleep(random.uniform(1.0, 2.0))
+        time.sleep(random.uniform(1.0, 1.8))
     except Exception:
         pass
 
     report_data = {}
 
     for ref_name, info in TARGET_REFERENCES.items():
-        print(f"Scansione referenza: {ref_name}...")
+        print(f"Scansione in corso per: {ref_name}...")
 
         chrono_items, market_price = fetch_chrono24(session, ref_name, info)
-        other_items = fetch_other_marketplaces(session, ref_name, info)
+        subito_items = fetch_subito_playwright(ref_name, info)
 
-        all_items = chrono_items + other_items
-
-        # Ordina dal più economico al più caro
+        all_items = chrono_items + subito_items
         all_items.sort(key=lambda x: x["prezzo_val"])
 
-        # Genera il formato del prezzo con sconto/maggiorazione percentuale
         for item in all_items:
             item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], market_price)
 
-        # Seleziona le prime 10 offerte meno care in assoluto
+        # Ripristino: estrazione delle prime 10 offerte meno care
         top_10 = all_items[:10]
 
         report_data[ref_name] = {
@@ -346,8 +428,8 @@ def run_watch_scanner():
             "items": top_10
         }
 
-        print(f"  -> Estratti {len(all_items)} annunci totali ({len(top_10)} inseriti nel report).")
-        time.sleep(random.uniform(2.0, 3.5))
+        print(f"  -> Estratti {len(chrono_items)} su Chrono24 e {len(subito_items)} su Subito.it.")
+        time.sleep(random.uniform(2.5, 4.0))
 
     return report_data
 
@@ -363,12 +445,11 @@ if __name__ == "__main__":
         items = data["items"]
         avg_price_formatted = f"€ {data['market_price']:,.0f}".replace(",", ".")
 
-        # Prezzo medio stampato unicamente nell'intestazione della referenza
-        print(f"\n--- {ref_name.upper()} (Prime {len(items)} offerte trovate) --- Prezzo medio: {avg_price_formatted}")
+        print(
+            f"\n--- {ref_name.upper()} (Prime {len(items)} offerte trovate) --- Prezzo medio stimato: {avg_price_formatted}")
 
         if items:
             for idx, item in enumerate(items, 1):
-                # Riga del singolo orologio (prezzo medio rimosso dalla riga)
                 print(
                     f"{idx:02d}. [{item['piattaforma']}] {item['modello']} | "
                     f"Prezzo: {item['prezzo_str']} | Paese: {item['paese']} | "
