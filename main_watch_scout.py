@@ -483,16 +483,85 @@ def fetch_subito_playwright(ref_name, info):
 
 # --- SCRAPER EBAY.IT (NUOVO) ---
 
-# --- SCRAPER EBAY.IT (Playwright Headless Stealth) ---
-
-# --- SCRAPER EBAY.IT (Playwright + BeautifulSoup Parsing) ---
+# Replacement for fetch_ebay() in main_watch_scout.py.
+# It intentionally leaves every other scraper untouched.
 
 def fetch_ebay(session, ref_name, info):
     results = []
-    query = urllib.parse.quote_plus(info["query"])
-    # _sop=15: Ordina per Prezzo + Spedizione dal più economico
-    # LH_PrefLoc=3: Filtra solo oggetti situati nell'Unione Europea
-    url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15&LH_PrefLoc=3"
+    search_query = build_marketplace_query(ref_name, info)
+    query = urllib.parse.quote_plus(search_query)
+    url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15&LH_PrefLoc=3&_ipg=120"
+
+    def parse_items(soup):
+        parsed_results = []
+        seen_links = set()
+        items = soup.select("ul.srp-results > li.s-item, .s-item, li.s-item")
+
+        for item in items:
+            title_el = item.select_one(
+                ".s-item__title > span:not(.LIGHT_HIGHLIGHT), .s-item__title"
+            )
+            price_el = item.select_one(".s-item__price, [class*='price']")
+            link_el = item.select_one(
+                "a.s-item__link[href*='/itm/'], a[href*='/itm/']"
+            )
+            if not title_el or not price_el or not link_el:
+                continue
+
+            title = title_el.get_text(" ", strip=True)
+            if not title or "Shop on eBay" in title or "Acquista su eBay" in title:
+                continue
+
+            link = link_el.get("href", "")
+            clean_link = link.split("?")[0]
+            if not re.search(r"/itm/\d+", clean_link) or clean_link in seen_links:
+                continue
+
+            price_text = price_el.get_text(" ", strip=True)
+            p_val = parse_eu_price(price_text)
+            if p_val is None:
+                price_match = re.search(r"[\d.,]+", price_text)
+                if not price_match:
+                    continue
+                raw_price = price_match.group(0).replace(".", "").replace(",", ".")
+                try:
+                    p_val = float(raw_price)
+                except ValueError:
+                    continue
+
+            # Il prezzo NON è un buon filtro per distinguere orologi da accessori:
+            # una referenza può legittimamente costare meno di 500 €.
+            title_lower = title.lower()
+            accessory_keywords = (
+                "ricambio", "pezzo di ricambio", "parts only", "bezel", "ghiera",
+                "cinturino", "strap", "bracelet", "bracciale", "quadrante", "dial",
+                "lancette", "hands", "movimento", "movement", "cassa", "case only"
+            )
+            if any(keyword in title_lower for keyword in accessory_keywords):
+                continue
+
+            loc_el = item.select_one(".s-item__location, .s-item__itemLocation")
+            loc_text = loc_el.get_text(" ", strip=True) if loc_el else "Italia"
+            sub_el = item.select_one(".s-item__subtitle")
+            sub_text = sub_el.get_text(" ", strip=True) if sub_el else ""
+            full_text = f"{title} {sub_text} {loc_text}"
+            seller_el = item.select_one(".s-item__seller-info, .s-item__seller-info-text")
+            seller_text = seller_el.get_text(" ", strip=True) if seller_el else ""
+
+            seen_links.add(clean_link)
+            parsed_results.append({
+                "piattaforma": "eBay",
+                "modello": ref_name,
+                "prezzo_val": p_val,
+                "paese": extract_country_name(loc_text),
+                "tipo_venditore": extract_seller_type(seller_text or full_text),
+                "anno": extract_year(full_text),
+                "quadrante": extract_dial_color(full_text),
+                "dotazione": extract_scope_of_delivery(full_text),
+                "link": clean_link
+            })
+
+        return parsed_results
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -516,17 +585,14 @@ def fetch_ebay(session, ref_name, info):
             }
         )
         page = context.new_page()
-
-        # Elude il rilevamento navigator.webdriver di Akamai
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
         """)
 
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(4000)
 
-            # Gestione del banner dei cookie GDPR (se presente)
             try:
                 cookie_btn = page.query_selector("#gdpr-banner-accept, button[id*='accept']")
                 if cookie_btn and cookie_btn.is_visible():
@@ -535,83 +601,33 @@ def fetch_ebay(session, ref_name, info):
             except Exception:
                 pass
 
-            # Estrazione dell'HTML completo e parsing con BeautifulSoup
-            html_content = page.content()
-            soup = BeautifulSoup(html_content, "html.parser")
+            try:
+                page_title = page.title() or ""
+                page_text = page.locator("body").inner_text(timeout=3000) if page.locator("body").count() else ""
+                if "Pardon Our Interruption" in page_title or "Access Denied" in page_title:
+                    print(f"  [eBay Warning] Challenge/Akamai rilevato per {ref_name}; provo fallback HTTP.")
+                elif "Pardon Our Interruption" in page_text[:5000]:
+                    print(f"  [eBay Warning] Challenge/Akamai rilevato per {ref_name}; provo fallback HTTP.")
+            except Exception:
+                pass
 
-            items = soup.select(".s-item, li.s-item")
-            seen_links = set()
-
-            for item in items:
-                title_el = item.select_one(".s-item__title")
-                price_el = item.select_one(".s-item__price")
-                link_el = item.select_one("a.s-item__link")
-
-                if not title_el or not price_el or not link_el:
-                    continue
-
-                title = title_el.get_text(strip=True)
-
-                # Scarta intestazioni fittizie e placeholder di eBay
-                if "Shop on eBay" in title or "Acquista su eBay" in title or title == "":
-                    continue
-
-                link = link_el.get("href", "")
-                if not link:
-                    continue
-
-                clean_link = link.split("?")[0]
-                if clean_link in seen_links:
-                    continue
-
-                price_text = price_el.get_text(strip=True)
-                price_match = re.search(r"([\d\.\,]+)", price_text.replace("EUR", "").replace("€", "").strip())
-                if not price_match:
-                    continue
-
-                raw_price = price_match.group(1).replace(".", "").replace(",", ".")
-                try:
-                    p_val = float(raw_price)
-                except ValueError:
-                    continue
-
-                # Filtro per escludere parti di ricambio o accessori
-                if p_val < 500:
-                    continue
-
-                # Estrazione Paese / Origine
-                loc_el = item.select_one(".s-item__location, .s-item__itemLocation")
-                loc_text = loc_el.get_text(strip=True) if loc_el else "Italia"
-                country = extract_country_name(loc_text)
-
-                # Metadati aggiuntivi
-                sub_el = item.select_one(".s-item__subtitle")
-                sub_text = sub_el.get_text(strip=True) if sub_el else ""
-                full_text = f"{title} {sub_text} {loc_text}"
-
-                seller_el = item.select_one(".s-item__seller-info")
-                seller_text = seller_el.get_text(strip=True) if seller_el else ""
-                seller_type = extract_seller_type(seller_text or full_text)
-
-                seen_links.add(clean_link)
-                results.append({
-                    "piattaforma": "eBay",
-                    "modello": ref_name,
-                    "prezzo_val": p_val,
-                    "paese": country,
-                    "tipo_venditore": seller_type,
-                    "anno": extract_year(full_text),
-                    "quadrante": extract_dial_color(full_text),
-                    "dotazione": extract_scope_of_delivery(full_text),
-                    "link": clean_link
-                })
+            results = parse_items(BeautifulSoup(page.content(), "html.parser"))
 
         except Exception as e:
             print(f"  [eBay Playwright Error] Impossibile recuperare {ref_name}: {e}")
         finally:
             browser.close()
 
+    if not results:
+        try:
+            response = session.get(url, headers=HEADERS, timeout=20)
+            if response.status_code == 200:
+                results = parse_items(BeautifulSoup(response.text, "html.parser"))
+        except Exception as e:
+            print(f"  [eBay HTTP Fallback Warning] {ref_name}: {e}")
+
     return results
+
 
 
 
