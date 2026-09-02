@@ -483,74 +483,136 @@ def fetch_subito_playwright(ref_name, info):
 
 # --- SCRAPER EBAY.IT (NUOVO) ---
 
+# --- SCRAPER EBAY.IT (Playwright Headless Stealth) ---
+
+# --- SCRAPER EBAY.IT (Playwright + BeautifulSoup Parsing) ---
+
 def fetch_ebay(session, ref_name, info):
-    """
-    eBay.it renderizza i risultati di ricerca lato server (HTML statico),
-    quindi non serve Playwright: usiamo la stessa sessione curl_cffi di Chrono24.
-    """
     results = []
-    search_query = build_marketplace_query(ref_name, info)
-    query = urllib.parse.quote_plus(search_query)
-    # _sop=15 => ordina per prezzo (+ spedizione) crescente
-    url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15"
+    query = urllib.parse.quote_plus(info["query"])
+    # _sop=15: Ordina per Prezzo + Spedizione dal più economico
+    # LH_PrefLoc=3: Filtra solo oggetti situati nell'Unione Europea
+    url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15&LH_PrefLoc=3"
 
-    try:
-        response = session.get(url, headers=HEADERS, timeout=12)
-        if response.status_code != 200:
-            print(f"  [eBay Warning] HTTP Status: {response.status_code}")
-            return results
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="it-IT",
+            timezone_id="Europe/Rome",
+            extra_http_headers={
+                "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+                "Sec-Ch-Ua-Mobile": "?0",
+                "Sec-Ch-Ua-Platform": '"Windows"'
+            }
+        )
+        page = context.new_page()
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        # Elude il rilevamento navigator.webdriver di Akamai
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
 
-        # Percorso primario: struttura classica delle card risultato eBay
-        cards = soup.select("li.s-item")
-        if not cards:
-            # Fallback: qualunque link verso una scheda prodotto (/itm/<id>)
-            cards = []
-            seen_hrefs = set()
-            for a_tag in soup.find_all("a", href=re.compile(r"/itm/\d+")):
-                href = a_tag["href"].split("?")[0]
-                if href in seen_hrefs:
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+
+            # Gestione del banner dei cookie GDPR (se presente)
+            try:
+                cookie_btn = page.query_selector("#gdpr-banner-accept, button[id*='accept']")
+                if cookie_btn and cookie_btn.is_visible():
+                    cookie_btn.click()
+                    page.wait_for_timeout(1000)
+            except Exception:
+                pass
+
+            # Estrazione dell'HTML completo e parsing con BeautifulSoup
+            html_content = page.content()
+            soup = BeautifulSoup(html_content, "html.parser")
+
+            items = soup.select(".s-item, li.s-item")
+            seen_links = set()
+
+            for item in items:
+                title_el = item.select_one(".s-item__title")
+                price_el = item.select_one(".s-item__price")
+                link_el = item.select_one("a.s-item__link")
+
+                if not title_el or not price_el or not link_el:
                     continue
-                seen_hrefs.add(href)
-                container = a_tag.find_parent(["li", "div"])
-                cards.append(container if container else a_tag)
 
-        for card in cards:
-            text_content = card.get_text(" ", strip=True)
-            price_val = parse_eu_price(text_content)
-            if not price_val or price_val <= 500:
-                continue
+                title = title_el.get_text(strip=True)
 
-            link_tag = card.find("a", href=re.compile(r"/itm/\d+"))
-            if not link_tag:
-                continue
-            link = link_tag["href"].split("?")[0]
+                # Scarta intestazioni fittizie e placeholder di eBay
+                if "Shop on eBay" in title or "Acquista su eBay" in title or title == "":
+                    continue
 
-            results.append({
-                "piattaforma": "eBay.it",
-                "modello": ref_name,
-                "prezzo_val": price_val,
-                "paese": "Italia 🇮🇹",
-                "tipo_venditore": extract_seller_type(text_content),
-                "anno": extract_year(text_content),
-                "quadrante": extract_dial_color(text_content),
-                "dotazione": extract_scope_of_delivery(text_content),
-                "link": link
-            })
+                link = link_el.get("href", "")
+                if not link:
+                    continue
 
-    except Exception as e:
-        print(f"  [eBay Error] {ref_name}: {e}")
+                clean_link = link.split("?")[0]
+                if clean_link in seen_links:
+                    continue
 
-    # Rimozione duplicati
-    unique_results = []
-    seen = set()
-    for item in results:
-        if item["link"] not in seen:
-            seen.add(item["link"])
-            unique_results.append(item)
+                price_text = price_el.get_text(strip=True)
+                price_match = re.search(r"([\d\.\,]+)", price_text.replace("EUR", "").replace("€", "").strip())
+                if not price_match:
+                    continue
 
-    return unique_results
+                raw_price = price_match.group(1).replace(".", "").replace(",", ".")
+                try:
+                    p_val = float(raw_price)
+                except ValueError:
+                    continue
+
+                # Filtro per escludere parti di ricambio o accessori
+                if p_val < 500:
+                    continue
+
+                # Estrazione Paese / Origine
+                loc_el = item.select_one(".s-item__location, .s-item__itemLocation")
+                loc_text = loc_el.get_text(strip=True) if loc_el else "Italia"
+                country = extract_country_name(loc_text)
+
+                # Metadati aggiuntivi
+                sub_el = item.select_one(".s-item__subtitle")
+                sub_text = sub_el.get_text(strip=True) if sub_el else ""
+                full_text = f"{title} {sub_text} {loc_text}"
+
+                seller_el = item.select_one(".s-item__seller-info")
+                seller_text = seller_el.get_text(strip=True) if seller_el else ""
+                seller_type = extract_seller_type(seller_text or full_text)
+
+                seen_links.add(clean_link)
+                results.append({
+                    "piattaforma": "eBay",
+                    "modello": ref_name,
+                    "prezzo_val": p_val,
+                    "paese": country,
+                    "tipo_venditore": seller_type,
+                    "anno": extract_year(full_text),
+                    "quadrante": extract_dial_color(full_text),
+                    "dotazione": extract_scope_of_delivery(full_text),
+                    "link": clean_link
+                })
+
+        except Exception as e:
+            print(f"  [eBay Playwright Error] Impossibile recuperare {ref_name}: {e}")
+        finally:
+            browser.close()
+
+    return results
+
 
 
 # --- ESECUZIONE GLOBALE ON DEMAND ---
