@@ -2,10 +2,14 @@ import re
 import json
 import time
 import random
+import logging
 import urllib.parse
 from curl_cffi import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+log = logging.getLogger("watch_scout")
 
 # Mappatura completa dei Paesi membri dell'Unione Europea
 EU_COUNTRY_MAP = {
@@ -137,7 +141,40 @@ def extract_seller_type(seller_info):
     return "Privato"
 
 
-# --- SCRAPER CHRONO24 ---
+def parse_eu_price(text):
+    """Estrae un prezzo in formato europeo (es. '€ 1.234,56' o '1234 €') da un testo libero."""
+    match = re.search(r"€\s?([\d.,]+)|([\d.,]+)\s?€", str(text))
+    if not match:
+        return None
+    raw = match.group(1) or match.group(2)
+    # Normalizza: rimuove i punti delle migliaia, converte la virgola decimale in punto
+    if "," in raw and "." in raw:
+        raw = raw.replace(".", "").replace(",", ".")
+    elif "," in raw:
+        raw = raw.replace(",", ".")
+    else:
+        raw = raw.replace(".", "")
+    try:
+        return float(raw)
+    except ValueError:
+        return None
+
+
+def build_marketplace_query(ref_name, info):
+    """
+    Costruisce una query 'marca + referenza' per i marketplace generalisti
+    (Subito, eBay), dove cercare la sola referenza nuda spesso non produce
+    risultati perché i privati descrivono l'orologio per marca/modello.
+    Chrono24 non usa questa funzione: la sua ricerca è già per slug/referenza.
+    """
+    brand = ref_name.split()[0]
+    ref_code = info["query"]
+    if brand.lower() in ref_code.lower():
+        return ref_code
+    return f"{brand} {ref_code}"
+
+
+# --- SCRAPER CHRONO24 (INVARIATO) ---
 
 def fetch_chrono24(session, ref_name, info):
     url = f"https://www.chrono24.it/{info['slug']}?dosearch=true&countryIds=EU&sortorder=1"
@@ -234,7 +271,7 @@ def fetch_chrono24(session, ref_name, info):
     return listings, extracted_market_price
 
 
-# --- SCRAPER SUBITO.IT (Playwright con attesa nodo nascosto) ---
+# --- SCRAPER SUBITO.IT (CORRETTO) ---
 
 def parse_subito_json_item(item, ref_name):
     price_val = None
@@ -282,13 +319,69 @@ def parse_subito_json_item(item, ref_name):
     return None
 
 
+def parse_subito_html_fallback(page, ref_name):
+    """
+    Fallback robusto basato su regex sull'URL dell'annuncio, NON su nomi di
+    classe CSS (quelli sono class-hash generati da Next.js e cambiano ad ogni
+    deploy, causa più comune di 'zero risultati' silenziosi).
+
+    Le pagine annuncio di Subito seguono sempre il pattern:
+    https://www.subito.it/<categoria>/<slug-testo>-<ID-numerico>.htm
+    """
+    results = []
+    anchors = page.query_selector_all("a[href*='.htm']")
+    id_pattern = re.compile(r"-\d{6,}\.htm/?$")
+    seen = set()
+
+    for a in anchors:
+        href = a.get_attribute("href") or ""
+        if not id_pattern.search(href):
+            continue
+        full_link = href if href.startswith("http") else f"https://www.subito.it{href}"
+        if full_link in seen:
+            continue
+
+        # Risale al contenitore della card per leggere prezzo e testo
+        container = a
+        card_text = ""
+        for _ in range(4):
+            container = container.evaluate_handle("el => el.closest('article, div')")
+            if container is None:
+                break
+            try:
+                card_text = container.as_element().inner_text()
+            except Exception:
+                card_text = ""
+            if "€" in card_text:
+                break
+
+        price_val = parse_eu_price(card_text)
+        if price_val and price_val > 500:
+            seen.add(full_link)
+            results.append({
+                "piattaforma": "Subito.it",
+                "modello": ref_name,
+                "prezzo_val": price_val,
+                "paese": "Italia 🇮🇹",
+                "tipo_venditore": extract_seller_type(card_text),
+                "anno": extract_year(card_text),
+                "quadrante": extract_dial_color(card_text),
+                "dotazione": extract_scope_of_delivery(card_text),
+                "link": full_link
+            })
+
+    return results
+
+
 def fetch_subito_playwright(ref_name, info):
     results = []
-    query = urllib.parse.quote_plus(info["query"])
-    url = f"https://www.subito.it/annunci-italia/vendita/usato/?c=36&q={query}&order=price_asc"
+    # FIX 1: query "marca + referenza" invece della sola referenza nuda,
+    # che su Subito restituisce quasi sempre 0 risultati specifici.
+    search_query = build_marketplace_query(ref_name, info)
+    query = urllib.parse.quote_plus(search_query)
+    url = f"https://www.subito.it/annunci-italia/vendita/usato/?q={query}&order=price_asc"
 
     with sync_playwright() as p:
-        # 1. Bypass antidentificazione headless
         browser = p.chromium.launch(
             headless=True,
             args=[
@@ -305,84 +398,74 @@ def fetch_subito_playwright(ref_name, info):
         )
         page = context.new_page()
 
-        # Rimuove il flag navigator.webdriver per eludere i controlli anti-bot
         page.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {
                 get: () => undefined
             });
         """)
 
-        # 2. Intercettazione diretta delle chiamate di rete JSON
+        # Intercettazione di rete: mantenuta come prima via (best-effort),
+        # ma non più l'unica strada, perché i nomi di endpoint non erano verificati.
         def handle_response(response):
-            if "search/items" in response.url or "hades" in response.url:
-                try:
-                    data = response.json()
-                    items = data.get("list", []) or data.get("items", [])
-                    for item in items:
-                        parsed = parse_subito_json_item(item, ref_name)
-                        if parsed:
-                            results.append(parsed)
-                except Exception:
-                    pass
+            ctype = response.headers.get("content-type", "")
+            if "json" not in ctype:
+                return
+            if "subito.it" not in response.url:
+                return
+            try:
+                data = response.json()
+            except Exception:
+                return
+            # Cerca in modo tollerante una lista di annunci in chiavi comuni
+            candidates = []
+            if isinstance(data, dict):
+                for key in ("list", "items", "ads", "results"):
+                    val = data.get(key)
+                    if isinstance(val, list) and val:
+                        candidates = val
+                        break
+            for item in candidates:
+                if isinstance(item, dict):
+                    parsed = parse_subito_json_item(item, ref_name)
+                    if parsed:
+                        results.append(parsed)
 
         page.on("response", handle_response)
 
         try:
             page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2000)
+            page.wait_for_timeout(2500)
 
-            # Se l'intercettazione di rete non ha ancora catturato i dati, prova a leggere dal tag __NEXT_DATA__
+            # Prova __NEXT_DATA__ se la rete non ha dato nulla
             if not results:
                 script_element = page.query_selector("#__NEXT_DATA__")
                 if script_element:
                     content = script_element.inner_text()
                     if content:
-                        data = json.loads(content)
-                        page_props = data.get("props", {}).get("pageProps", {})
-                        items = (
-                                page_props.get("initialState", {}).get("items", {}).get("list", []) or
-                                page_props.get("items", []) or
-                                page_props.get("searchResults", {}).get("items", [])
-                        )
-                        for item in items:
-                            parsed = parse_subito_json_item(item, ref_name)
-                            if parsed:
-                                results.append(parsed)
+                        try:
+                            data = json.loads(content)
+                            page_props = data.get("props", {}).get("pageProps", {})
+                            items = (
+                                    page_props.get("initialState", {}).get("items", {}).get("list", []) or
+                                    page_props.get("items", []) or
+                                    page_props.get("searchResults", {}).get("items", [])
+                            )
+                            for item in items:
+                                parsed = parse_subito_json_item(item, ref_name)
+                                if parsed:
+                                    results.append(parsed)
+                        except Exception as e:
+                            print(f"  [Subito __NEXT_DATA__ Error] {e}")
 
-            # 3. Fallback HTML se il JSON viene bloccato completamente
+            # FIX 2: fallback HTML basato su URL-pattern stabile, non su classi CSS
             if not results:
-                cards = page.query_selector_all("div[class*='items__item']")
-                for card in cards:
-                    link_el = card.query_selector("a[class*='SmallCard-module_link']")
-                    price_el = card.query_selector("p[class*='price']")
-
-                    if link_el and price_el:
-                        link = link_el.get_attribute("href")
-                        price_text = price_el.inner_text()
-                        price_match = re.search(r"([\d\.]+)\s?€", price_text)
-
-                        if price_match and link:
-                            p_val = float(price_match.group(1).replace(".", ""))
-                            if p_val > 500:
-                                card_text = card.inner_text()
-                                results.append({
-                                    "piattaforma": "Subito.it",
-                                    "modello": ref_name,
-                                    "prezzo_val": p_val,
-                                    "paese": "Italia 🇮🇹",
-                                    "tipo_venditore": extract_seller_type(card_text),
-                                    "anno": extract_year(card_text),
-                                    "quadrante": extract_dial_color(card_text),
-                                    "dotazione": extract_scope_of_delivery(card_text),
-                                    "link": link
-                                })
+                results = parse_subito_html_fallback(page, ref_name)
 
         except Exception as e:
             print(f"  [Subito Playwright Error] Impossibile recuperare {ref_name}: {e}")
         finally:
             browser.close()
 
-    # Rimuove eventuali duplicati per lo stesso link
     unique_results = []
     seen = set()
     for item in results:
@@ -393,13 +476,83 @@ def fetch_subito_playwright(ref_name, info):
     return unique_results
 
 
+# --- SCRAPER EBAY.IT (NUOVO) ---
+
+def fetch_ebay(session, ref_name, info):
+    """
+    eBay.it renderizza i risultati di ricerca lato server (HTML statico),
+    quindi non serve Playwright: usiamo la stessa sessione curl_cffi di Chrono24.
+    """
+    results = []
+    search_query = build_marketplace_query(ref_name, info)
+    query = urllib.parse.quote_plus(search_query)
+    # _sop=15 => ordina per prezzo (+ spedizione) crescente
+    url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15"
+
+    try:
+        response = session.get(url, headers=HEADERS, timeout=12)
+        if response.status_code != 200:
+            print(f"  [eBay Warning] HTTP Status: {response.status_code}")
+            return results
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        # Percorso primario: struttura classica delle card risultato eBay
+        cards = soup.select("li.s-item")
+        if not cards:
+            # Fallback: qualunque link verso una scheda prodotto (/itm/<id>)
+            cards = []
+            seen_hrefs = set()
+            for a_tag in soup.find_all("a", href=re.compile(r"/itm/\d+")):
+                href = a_tag["href"].split("?")[0]
+                if href in seen_hrefs:
+                    continue
+                seen_hrefs.add(href)
+                container = a_tag.find_parent(["li", "div"])
+                cards.append(container if container else a_tag)
+
+        for card in cards:
+            text_content = card.get_text(" ", strip=True)
+            price_val = parse_eu_price(text_content)
+            if not price_val or price_val <= 500:
+                continue
+
+            link_tag = card.find("a", href=re.compile(r"/itm/\d+"))
+            if not link_tag:
+                continue
+            link = link_tag["href"].split("?")[0]
+
+            results.append({
+                "piattaforma": "eBay.it",
+                "modello": ref_name,
+                "prezzo_val": price_val,
+                "paese": "Italia 🇮🇹",
+                "tipo_venditore": extract_seller_type(text_content),
+                "anno": extract_year(text_content),
+                "quadrante": extract_dial_color(text_content),
+                "dotazione": extract_scope_of_delivery(text_content),
+                "link": link
+            })
+
+    except Exception as e:
+        print(f"  [eBay Error] {ref_name}: {e}")
+
+    # Rimozione duplicati
+    unique_results = []
+    seen = set()
+    for item in results:
+        if item["link"] not in seen:
+            seen.add(item["link"])
+            unique_results.append(item)
+
+    return unique_results
+
 
 # --- ESECUZIONE GLOBALE ON DEMAND ---
 
 def run_watch_scanner():
     session = requests.Session(impersonate="chrome124")
 
-    # Warm-up della sessione per superare eventuali check TLS base
     try:
         session.get("https://www.chrono24.it", headers=HEADERS, timeout=10)
         time.sleep(random.uniform(1.0, 1.8))
@@ -413,14 +566,14 @@ def run_watch_scanner():
 
         chrono_items, market_price = fetch_chrono24(session, ref_name, info)
         subito_items = fetch_subito_playwright(ref_name, info)
+        ebay_items = fetch_ebay(session, ref_name, info)
 
-        all_items = chrono_items + subito_items
+        all_items = chrono_items + subito_items + ebay_items
         all_items.sort(key=lambda x: x["prezzo_val"])
 
         for item in all_items:
             item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], market_price)
 
-        # Ripristino: estrazione delle prime 10 offerte meno care
         top_10 = all_items[:10]
 
         report_data[ref_name] = {
@@ -428,7 +581,8 @@ def run_watch_scanner():
             "items": top_10
         }
 
-        print(f"  -> Estratti {len(chrono_items)} su Chrono24 e {len(subito_items)} su Subito.it.")
+        print(f"  -> Estratti {len(chrono_items)} su Chrono24, {len(subito_items)} su Subito.it, "
+              f"{len(ebay_items)} su eBay.it.")
         time.sleep(random.uniform(2.5, 4.0))
 
     return report_data
