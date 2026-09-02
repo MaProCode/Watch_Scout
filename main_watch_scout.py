@@ -484,16 +484,19 @@ def fetch_subito_playwright(ref_name, info):
 # --- SCRAPER EBAY.IT (NUOVO) ---
 
 def fetch_ebay(session, ref_name, info):
-    """Recupera le inserzioni eBay.it.
-
-    Mantiene il flusso Playwright dello scraper originale, ma supporta sia il
-    vecchio markup s-item sia il nuovo markup s-card/su-card-container di eBay.
-    Riscalda inoltre la sessione eBay prima della SRP per ridurre il rischio di
-    ricevere la challenge/interstitial invece dei risultati.
+    """
+    Scraper eBay.it.
+    Mantiene Playwright, ma non dipende più esclusivamente dal vecchio markup
+    .s-item__*. eBay usa attualmente card .s-card / .su-card-container.
     """
     results = []
+
+    # Per eBay usiamo la stessa logica di query dei marketplace generalisti.
     search_query = build_marketplace_query(ref_name, info)
     query = urllib.parse.quote_plus(search_query)
+
+    # _sop=15: prezzo + spedizione dal più economico.
+    # LH_PrefLoc=3: mantiene il filtro UE già adottato dallo scraper originale.
     url = f"https://www.ebay.it/sch/i.html?_nkw={query}&_sop=15&LH_PrefLoc=3"
 
     with sync_playwright() as p:
@@ -506,7 +509,11 @@ def fetch_ebay(session, ref_name, info):
             ]
         )
         context = browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
             viewport={"width": 1920, "height": 1080},
             locale="it-IT",
             timezone_id="Europe/Rome",
@@ -518,241 +525,216 @@ def fetch_ebay(session, ref_name, info):
             }
         )
         page = context.new_page()
+
         page.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
         """)
 
         try:
-            # eBay può bloccare una navigazione diretta alla SRP.
-            page.goto("https://www.ebay.it/", timeout=30000, wait_until="domcontentloaded")
+            # Warm-up della sessione: eBay è più permissivo se la navigazione
+            # parte dalla home prima della SRP.
+            page.goto(
+                "https://www.ebay.it/",
+                timeout=30000,
+                wait_until="domcontentloaded"
+            )
             page.wait_for_timeout(1200)
 
-            page.goto(url, timeout=30000, wait_until="domcontentloaded")
-            page.wait_for_timeout(2500)
-
-            # Cookie banner, quando presente.
+            # Gestione banner cookie, se presente.
             try:
-                for selector in (
-                    "#gdpr-banner-accept",
-                    "button[id*='accept']",
-                    "button[aria-label*='Accetta']",
-                    "button[title*='Accetta']"
-                ):
-                    cookie_btn = page.query_selector(selector)
-                    if cookie_btn and cookie_btn.is_visible():
-                        cookie_btn.click()
-                        page.wait_for_timeout(800)
-                        break
+                cookie_selectors = (
+                    "#gdpr-banner-accept, "
+                    "button[id*='accept'], "
+                    "button[aria-label*='Accetta'], "
+                    "button:has-text('Accetta')"
+                )
+                cookie_btn = page.query_selector(cookie_selectors)
+                if cookie_btn and cookie_btn.is_visible():
+                    cookie_btn.click()
+                    page.wait_for_timeout(700)
             except Exception:
                 pass
 
-            # Layout attuale eBay: s-card / su-card-container.
-            # Manteniamo anche i selettori legacy per eventuali pagine non ancora migrate.
-            items = page.query_selector_all(
-                "li.s-card, div.su-card-container, li.s-item, .s-item"
+            # Solo dopo il warm-up apriamo la ricerca.
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(2500)
+
+            # Se eBay ha restituito un challenge/interstitial, non proviamo
+            # a interpretarlo come "0 risultati".
+            body_text = (page.locator("body").inner_text(timeout=5000) or "").lower()
+            challenge_markers = (
+                "pardon our interruption",
+                "access denied",
+                "verify you're human",
+                "verifica che sei umano"
             )
+            if any(marker in body_text for marker in challenge_markers):
+                print(f"  [eBay Warning] eBay ha restituito una challenge per: {ref_name}")
+                return results
 
-            # Se non abbiamo card, aspettiamo ancora un ciclo di rendering.
-            if not items:
-                page.wait_for_timeout(2500)
-                items = page.query_selector_all(
-                    "li.s-card, div.su-card-container, li.s-item, .s-item"
-                )
-
+            html_content = page.content()
+            soup = BeautifulSoup(html_content, "html.parser")
             seen_links = set()
 
-            for item in items:
-                try:
-                    # Nuovo layout eBay
-                    title_el = item.query_selector(
-                        ".s-card__title, [role='heading'][aria-level='3'], .s-item__title"
-                    )
-                    price_el = item.query_selector(
-                        ".s-card__price, .s-item__price"
-                    )
-                    link_el = item.query_selector(
-                        "a.s-card__link[href*='/itm/'], a.su-link[href*='/itm/'], "
-                        "a.s-item__link[href*='/itm/'], a[href*='/itm/']"
-                    )
+            # eBay SRP attuale: .s-card / .su-card-container.
+            # Manteniamo anche il vecchio .s-item come fallback.
+            cards = soup.select("li.s-card, .su-card-container, li.s-item")
 
-                    if not title_el or not link_el:
-                        continue
+            for item in cards:
+                # Nuovo markup
+                title_el = item.select_one(
+                    ".s-card__title, .su-styled-text.s-card__title"
+                )
+                price_el = item.select_one(
+                    ".s-card__price, .su-styled-text.s-card__price"
+                )
+                link_el = item.select_one(
+                    "a.s-card__link[href*='/itm/'], "
+                    "a[href*='/itm/']"
+                )
 
-                    title = title_el.inner_text().strip()
-                    if not title:
-                        continue
+                # Vecchio markup come fallback, nel caso eBay serva ancora
+                # una variante legacy per quella sessione.
+                if title_el is None:
+                    title_el = item.select_one(".s-item__title")
+                if price_el is None:
+                    price_el = item.select_one(".s-item__price")
+                if link_el is None:
+                    link_el = item.select_one("a.s-item__link[href*='/itm/']")
 
-                    # Scarta intestazioni/placeholder di eBay.
-                    title_lower = title.lower()
-                    if (
-                        title_lower in {"shop on ebay", "acquista su ebay"}
-                        or "shop on ebay" in title_lower
-                        or "acquista su ebay" in title_lower
-                    ):
-                        continue
-
-                    link = link_el.get_attribute("href") or ""
-                    if not link:
-                        continue
-
-                    if link.startswith("//"):
-                        link = "https:" + link
-                    elif link.startswith("/"):
-                        link = "https://www.ebay.it" + link
-
-                    clean_link = link.split("?")[0]
-                    # Siamo interessati agli annunci, non a pagine prodotto/categorie.
-                    if "/itm/" not in clean_link or clean_link in seen_links:
-                        continue
-
-                    # Nel nuovo layout il prezzo è normalmente in s-card__price.
-                    # Fallback: testo della card, utile per casi multi-offerta.
-                    price_text = price_el.inner_text().strip() if price_el else ""
-                    if not price_text:
-                        price_text = item.inner_text().strip()
-
-                    p_val = parse_eu_price(price_text)
-                    if p_val is None:
-                        # eBay può usare forme come "EUR 1.234,56".
-                        m = re.search(r"(?:EUR|€)\s*([\d\.]+(?:,[\d]+)?)", price_text, re.I)
-                        if m:
-                            p_val = parse_eu_price(m.group(0))
-                    if p_val is None:
-                        continue
-
-                    # Filtro originale: esclude ricambi/accessori molto economici.
-                    if p_val < 500:
-                        continue
-
-                    loc_el = item.query_selector(
-                        ".s-card__attribute-row, .s-card__footer--row, "
-                        ".s-item__location, .s-item__itemLocation"
-                    )
-                    loc_text = loc_el.inner_text().strip() if loc_el else "Italia"
-                    country = extract_country_name(loc_text)
-
-                    sub_el = item.query_selector(
-                        ".s-card__subtitle, .s-item__subtitle"
-                    )
-                    sub_text = sub_el.inner_text().strip() if sub_el else ""
-                    full_text = f"{title} {sub_text} {loc_text}"
-
-                    seller_el = item.query_selector(
-                        ".s-card__footer, .s-item__seller-info, .s-item__seller-info-text"
-                    )
-                    seller_text = seller_el.inner_text().strip() if seller_el else ""
-                    seller_type = extract_seller_type(seller_text or full_text)
-
-                    seen_links.add(clean_link)
-                    results.append({
-                        "piattaforma": "eBay",
-                        "modello": ref_name,
-                        "prezzo_val": p_val,
-                        "paese": country,
-                        "tipo_venditore": seller_type,
-                        "anno": extract_year(full_text),
-                        "quadrante": extract_dial_color(full_text),
-                        "dotazione": extract_scope_of_delivery(full_text),
-                        "link": clean_link
-                    })
-                except Exception:
-                    # Una card malformata non deve interrompere tutta la scansione.
+                if not link_el:
                     continue
 
-            # Fallback HTTP tramite curl_cffi già usato dal programma, se Playwright
-            # non ha ottenuto alcuna card utile. Non modifica gli altri scraper.
-            if not results:
-                try:
-                    response = session.get(url, headers=HEADERS, timeout=20)
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.text, "html.parser")
-                        items_html = soup.select(
-                            "li.s-card, div.su-card-container, li.s-item, .s-item"
-                        )
-                        for item in items_html:
-                            title_el = item.select_one(
-                                ".s-card__title, [role='heading'][aria-level='3'], .s-item__title"
-                            )
-                            price_el = item.select_one(
-                                ".s-card__price, .s-item__price"
-                            )
-                            link_el = item.select_one(
-                                "a.s-card__link[href*='/itm/'], a.su-link[href*='/itm/'], "
-                                "a.s-item__link[href*='/itm/'], a[href*='/itm/']"
-                            )
-                            if not title_el or not link_el:
-                                continue
+                link = link_el.get("href", "").strip()
+                if not link or "/itm/" not in link:
+                    continue
 
-                            title = title_el.get_text(" ", strip=True)
-                            if not title:
-                                continue
+                # Ricava l'ID pubblico dell'inserzione. Serve anche a eliminare
+                # la card fittizia "Shop on eBay".
+                item_match = re.search(r"/itm/(?:[^/]+/)?(\d{8,})", link)
+                if not item_match:
+                    continue
+                item_id = item_match.group(1)
+                if item_id == "123456":
+                    continue
 
-                            link = link_el.get("href", "")
-                            if link.startswith("//"):
-                                link = "https:" + link
-                            elif link.startswith("/"):
-                                link = "https://www.ebay.it" + link
-                            clean_link = link.split("?")[0]
-                            if "/itm/" not in clean_link or clean_link in seen_links:
-                                continue
+                clean_link = link.split("?")[0]
+                if clean_link.startswith("//"):
+                    clean_link = f"https:{clean_link}"
+                elif clean_link.startswith("/"):
+                    clean_link = f"https://www.ebay.it{clean_link}"
 
-                            price_text = price_el.get_text(" ", strip=True) if price_el else item.get_text(" ", strip=True)
-                            p_val = parse_eu_price(price_text)
-                            if p_val is None or p_val < 500:
-                                continue
+                if clean_link in seen_links:
+                    continue
 
-                            loc_el = item.select_one(
-                                ".s-card__attribute-row, .s-card__footer--row, "
-                                ".s-item__location, .s-item__itemLocation"
-                            )
-                            loc_text = loc_el.get_text(" ", strip=True) if loc_el else "Italia"
-                            sub_el = item.select_one(".s-card__subtitle, .s-item__subtitle")
-                            sub_text = sub_el.get_text(" ", strip=True) if sub_el else ""
-                            full_text = f"{title} {sub_text} {loc_text}"
-                            seller_el = item.select_one(
-                                ".s-card__footer, .s-item__seller-info, .s-item__seller-info-text"
-                            )
-                            seller_text = seller_el.get_text(" ", strip=True) if seller_el else ""
+                # Titolo: se manca il nodo titolo, prova il testo della card.
+                title = title_el.get_text(" ", strip=True) if title_el else ""
+                if not title:
+                    # Evita di utilizzare il prezzo come titolo.
+                    card_copy = item.get_text(" ", strip=True)
+                    title = re.sub(r"EUR\s*[\d\.,]+", "", card_copy).strip()
 
-                            seen_links.add(clean_link)
-                            results.append({
-                                "piattaforma": "eBay",
-                                "modello": ref_name,
-                                "prezzo_val": p_val,
-                                "paese": extract_country_name(loc_text),
-                                "tipo_venditore": extract_seller_type(seller_text or full_text),
-                                "anno": extract_year(full_text),
-                                "quadrante": extract_dial_color(full_text),
-                                "dotazione": extract_scope_of_delivery(full_text),
-                                "link": clean_link
-                            })
-                except Exception as fallback_error:
-                    print(f"  [eBay HTTP Fallback] {fallback_error}")
+                normalized_title = re.sub(r"\s+", " ", title).strip()
+                if not normalized_title:
+                    continue
 
-            if not results:
-                # Diagnostica utile senza alterare il report: permette di distinguere
-                # 'nessuna inserzione' da 'pagina challenge/blocco'.
-                try:
-                    body_text = page.locator("body").inner_text().lower()
-                    if any(x in body_text for x in (
-                        "pardon our interruption",
-                        "access denied",
-                        "verifica che sei umano",
-                        "captcha"
-                    )):
-                        print(f"  [eBay Warning] eBay ha restituito una pagina challenge per: {search_query}")
-                    else:
-                        print(f"  [eBay Warning] Nessuna inserzione parsabile per: {search_query}")
-                except Exception:
-                    pass
+                # Scarta la card placeholder di eBay.
+                if normalized_title.lower() in {
+                    "shop on ebay",
+                    "acquista su ebay"
+                }:
+                    continue
+
+                if price_el:
+                    price_text = price_el.get_text(" ", strip=True)
+                else:
+                    # Fallback sul testo della card: utile per le card sparse.
+                    price_text = item.get_text(" ", strip=True)
+
+                p_val = parse_eu_price(price_text)
+                if p_val is None:
+                    # Fallback specifico per casi come "EUR 12.406,95".
+                    match = re.search(
+                        r"(?:EUR|€)\s*([\d\.,]+)",
+                        price_text,
+                        flags=re.IGNORECASE
+                    )
+                    if match:
+                        raw_price = match.group(1)
+                        if "," in raw_price and "." in raw_price:
+                            raw_price = raw_price.replace(".", "").replace(",", ".")
+                        elif "," in raw_price:
+                            raw_price = raw_price.replace(",", ".")
+                        else:
+                            raw_price = raw_price.replace(".", "")
+                        try:
+                            p_val = float(raw_price)
+                        except ValueError:
+                            p_val = None
+
+                if p_val is None:
+                    continue
+
+                # Manteniamo il filtro originale dello scraper.
+                if p_val < 500:
+                    continue
+
+                # Località: nuovo markup -> righe attributo/footer;
+                # legacy -> selettori .s-item__*.
+                loc_el = item.select_one(
+                    ".s-card__attribute-row, "
+                    ".s-card__footer--row, "
+                    ".s-item__location, "
+                    ".s-item__itemLocation"
+                )
+                loc_text = loc_el.get_text(" ", strip=True) if loc_el else ""
+
+                full_text = item.get_text(" ", strip=True)
+
+                # Se la card non espone una località dedicata, preserviamo
+                # il comportamento originale: Italia come default.
+                if not loc_text:
+                    loc_text = "Italia"
+
+                country = extract_country_name(loc_text)
+
+                seller_el = item.select_one(
+                    ".s-card__attribute-row, "
+                    ".s-card__footer--row, "
+                    ".s-item__seller-info"
+                )
+                seller_text = seller_el.get_text(" ", strip=True) if seller_el else ""
+                seller_type = extract_seller_type(seller_text or full_text)
+
+                seen_links.add(clean_link)
+                results.append({
+                    "piattaforma": "eBay",
+                    "modello": ref_name,
+                    "prezzo_val": p_val,
+                    "paese": country,
+                    "tipo_venditore": seller_type,
+                    "anno": extract_year(full_text),
+                    "quadrante": extract_dial_color(full_text),
+                    "dotazione": extract_scope_of_delivery(full_text),
+                    "link": clean_link
+                })
 
         except Exception as e:
             print(f"  [eBay Playwright Error] Impossibile recuperare {ref_name}: {e}")
         finally:
             browser.close()
 
-    results.sort(key=lambda x: x["prezzo_val"])
+    if not results:
+        print(f"  [eBay Warning] Nessuna inserzione parsabile per: {search_query}")
+
     return results
+
+
+
+
+
 
 
 
