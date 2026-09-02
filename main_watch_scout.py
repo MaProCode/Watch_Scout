@@ -28,22 +28,22 @@ TARGET_REFERENCES = {
     "Rolex Datejust 41 (126333) Steel&Gold flutè": {
         "slug": "rolex/ref-126333.htm",
         "query": "126333",
-        "min_price": 1000
+        "min_price": 2000
     },
     "Rolex Datejust 41 (126334) Steel flutè": {
         "slug": "rolex/ref-126334.htm",
         "query": "126334",
-        "min_price": 1000
+        "min_price": 2000
     },
     "Rolex Datejust 41 (126300) Steel smooth": {
         "slug": "rolex/ref-126300.htm",
         "query": "126300",
-        "min_price": 1000
+        "min_price": 2000
     },
     "Cartier Santos Medium (WSSA0029) 35mm": {
         "slug": "cartier/ref-wssa0029.htm",
         "query": "WSSA0029",
-        "min_price": 1000
+        "min_price": 2000
     },
     "Cartier Santos 100 (2878) 33mm": {
         "slug": "cartier/ref-2878.htm",
@@ -512,6 +512,7 @@ def fetch_ebay(session, ref_name, info):
     .s-item__*. eBay usa attualmente card .s-card / .su-card-container.
     """
     results = []
+    min_price = info["min_price"]
 
     # Per eBay usiamo la stessa logica di query dei marketplace generalisti.
     search_query = build_marketplace_query(ref_name, info)
