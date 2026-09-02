@@ -54,6 +54,11 @@ TARGET_REFERENCES = {
         "slug": "tudor/ref-79220r.htm",
         "query": "79220R",
         "market_price": 3500
+    },
+    "Seiko Cement/Lunar (SRPG63K1)": {
+        "slug": "seiko/ref-srpg63k1.htm",
+        "query": "SRPG63K1",
+        "market_price": 200
     }
 }
 
