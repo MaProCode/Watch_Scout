@@ -28,37 +28,37 @@ TARGET_REFERENCES = {
     "Rolex Datejust 41 (126333) Steel&Gold flutè": {
         "slug": "rolex/ref-126333.htm",
         "query": "126333",
-        "market_price": 14000
+        "min_price": 1000
     },
     "Rolex Datejust 41 (126334) Steel flutè": {
         "slug": "rolex/ref-126334.htm",
         "query": "126334",
-        "market_price": 12400
+        "min_price": 1000
     },
     "Rolex Datejust 41 (126300) Steel smooth": {
         "slug": "rolex/ref-126300.htm",
         "query": "126300",
-        "market_price": 9300
+        "min_price": 1000
     },
     "Cartier Santos Medium (WSSA0029) 35mm": {
         "slug": "cartier/ref-wssa0029.htm",
         "query": "WSSA0029",
-        "market_price": 6500
+        "min_price": 1000
     },
     "Cartier Santos 100 (2878) 33mm": {
         "slug": "cartier/ref-2878.htm",
         "query": "Cartier 2878",
-        "market_price": 3700
+        "min_price": 1000
     },
     "Tudor Black Bay (79220R) Smiley": {
         "slug": "tudor/ref-79220r.htm",
         "query": "79220R",
-        "market_price": 3500
+        "min_price": 1000
     },
     "Seiko Cement/Lunar (SRPG63K1)": {
         "slug": "seiko/ref-srpg63k1.htm",
         "query": "SRPG63K1",
-        "market_price": 200
+        "min_price": 50
     }
 }
 
@@ -79,11 +79,11 @@ HEADERS = {
 
 # --- FUNZIONI DI FORMATTAZIONE E PARSING METADATI ---
 
-def calculate_discount_format(price_val, market_price):
-    if not price_val or not market_price:
+def calculate_discount_format(price_val, average_price):
+    if not price_val or not average_price:
         return f"€ {price_val:,.0f}".replace(",", ".")
 
-    diff_pct = ((market_price - price_val) / market_price) * 100
+    diff_pct = ((average_price - price_val) / average_price) * 100
     price_formatted = f"€ {price_val:,.0f}".replace(",", ".")
 
     if diff_pct > 0:
@@ -181,51 +181,70 @@ def build_marketplace_query(ref_name, info):
 
 # --- SCRAPER CHRONO24 (INVARIATO) ---
 
+def _extract_chrono24_average_price(search_results, listings):
+    """Estrae il prezzo medio dichiarato da Chrono24.
+    Se il campo ufficiale non è presente, calcola un fallback sulla stessa
+    lista di annunci Chrono24 già estratta; non usa più valori hardcoded.
+    """
+    dynamic_avg = search_results.get("averagePrice") or search_results.get("marketPrice")
+    if isinstance(dynamic_avg, dict):
+        dynamic_avg = dynamic_avg.get("amount") or dynamic_avg.get("value")
+    try:
+        if dynamic_avg is not None and float(dynamic_avg) > 0:
+            return float(dynamic_avg)
+    except (TypeError, ValueError):
+        pass
+
+    prices = [item.get("prezzo_val") for item in listings if item.get("prezzo_val")]
+    return sum(prices) / len(prices) if prices else None
+
+
 def fetch_chrono24(session, ref_name, info):
     url = f"https://www.chrono24.it/{info['slug']}?dosearch=true&countryIds=EU&sortorder=1"
-    market_price = info["market_price"]
+    min_price = info["min_price"]
     listings = []
+    average_price = None
 
     try:
         response = session.get(url, headers=HEADERS, timeout=12)
         if response.status_code != 200:
             print(f"  [Chrono24 Warning] HTTP Status: {response.status_code}")
-            return listings, market_price
+            return listings, average_price
 
         soup = BeautifulSoup(response.text, "html.parser")
-        extracted_market_price = market_price
-
         script_json = soup.find("script", id="__NEXT_DATA__")
+
         if script_json:
             try:
-                data = json.loads(script_json.string)
+                data = json.loads(script_json.string or "{}")
                 page_props = data.get("props", {}).get("pageProps", {})
-                search_results = page_props.get("searchResults", {})
+                search_results = page_props.get("searchResults", {}) or {}
+                articles = search_results.get("articles", []) or []
 
-                dynamic_avg = search_results.get("averagePrice") or page_props.get("marketPrice")
-                if dynamic_avg and float(dynamic_avg) > 0:
-                    extracted_market_price = float(dynamic_avg)
-
-                articles = search_results.get("articles", [])
                 for item in articles:
-                    price_val = item.get("price", {}).get("amount", 0)
+                    price_obj = item.get("price", {})
+                    price_val = price_obj.get("amount", 0) if isinstance(price_obj, dict) else price_obj
                     url_path = item.get("url", "")
                     title = item.get("title", "")
                     subtitle = item.get("subtitle", "")
                     full_text = f"{title} {subtitle}"
 
-                    if price_val > 500 and url_path:
+                    try:
+                        price_val = float(price_val)
+                    except (TypeError, ValueError):
+                        continue
+
+                    if price_val > min_price and url_path:
                         link = f"https://www.chrono24.it{url_path}" if url_path.startswith("/") else url_path
-                        seller_obj = item.get("seller", {})
+                        seller_obj = item.get("seller", {}) or {}
                         raw_country = seller_obj.get("country") or item.get("country") or item.get("shippingCountry")
                         country = extract_country_name(raw_country)
                         seller_type = extract_seller_type(
                             item.get("isProfessional") or seller_obj.get("isProfessional"))
-
                         listings.append({
                             "piattaforma": "Chrono24",
                             "modello": ref_name,
-                            "prezzo_val": float(price_val),
+                            "prezzo_val": price_val,
                             "paese": country,
                             "tipo_venditore": seller_type,
                             "anno": str(item.get("year") or extract_year(full_text)),
@@ -233,8 +252,11 @@ def fetch_chrono24(session, ref_name, info):
                             "dotazione": extract_scope_of_delivery(item.get("scopeOfDelivery", full_text)),
                             "link": link
                         })
+
+                # Preferisce il prezzo medio che Chrono24 espone nei propri dati.
+                average_price = _extract_chrono24_average_price(search_results, listings)
                 if listings:
-                    return listings, extracted_market_price
+                    return listings, average_price
             except Exception as e:
                 print(f"  [Chrono24 JSON Error]: {e}")
 
@@ -243,42 +265,41 @@ def fetch_chrono24(session, ref_name, info):
         seen_links = set()
 
         for link_tag in product_links:
-            href = link_tag["href"]
+            href = link_tag.get("href", "")
             full_link = f"https://www.chrono24.it{href}" if href.startswith("/") else href
-            if full_link in seen_links: continue
+            if full_link in seen_links:
+                continue
 
             container = link_tag.find_parent(["div", "article"])
-            if not container: continue
-
+            if not container:
+                continue
             text_content = container.get_text(" ", strip=True)
-            price_match = re.search(r"€\s?([\d\.]+)|([\d\.]+)\s?€", text_content)
+            price_val = parse_eu_price(text_content)
 
-            if price_match:
-                raw_price = price_match.group(1) or price_match.group(2)
-                clean_price = raw_price.replace(".", "")
-                if clean_price.isdigit() and float(clean_price) > 500:
-                    seen_links.add(full_link)
-                    listings.append({
-                        "piattaforma": "Chrono24",
-                        "modello": ref_name,
-                        "prezzo_val": float(clean_price),
-                        "paese": extract_country_name(text_content),
-                        "tipo_venditore": extract_seller_type(text_content),
-                        "anno": extract_year(text_content),
-                        "quadrante": extract_dial_color(text_content),
-                        "dotazione": extract_scope_of_delivery(text_content),
-                        "link": full_link
-                    })
+            if price_val is not None and price_val > min_price:
+                seen_links.add(full_link)
+                listings.append({
+                    "piattaforma": "Chrono24",
+                    "modello": ref_name,
+                    "prezzo_val": price_val,
+                    "paese": extract_country_name(text_content),
+                    "tipo_venditore": extract_seller_type(text_content),
+                    "anno": extract_year(text_content),
+                    "quadrante": extract_dial_color(text_content),
+                    "dotazione": extract_scope_of_delivery(text_content),
+                    "link": full_link
+                })
+
+        if listings:
+            average_price = sum(item["prezzo_val"] for item in listings) / len(listings)
 
     except Exception as e:
         print(f"  [Chrono24 Error] {ref_name}: {e}")
 
-    return listings, extracted_market_price
-
-
+    return listings, average_price
 # --- SCRAPER SUBITO.IT (CORRETTO) ---
 
-def parse_subito_json_item(item, ref_name):
+def parse_subito_json_item(item, ref_name, min_price=500):
     price_val = None
     features = item.get("features", [])
 
@@ -300,7 +321,7 @@ def parse_subito_json_item(item, ref_name):
     if price_val:
         try:
             p_val = float(str(price_val).replace(".", "").replace(",", "."))
-            if p_val > 500:
+            if p_val > min_price:
                 url_item = item.get("urls", {}).get("default") or item.get("url") or ""
                 if not url_item: return None
 
@@ -324,7 +345,7 @@ def parse_subito_json_item(item, ref_name):
     return None
 
 
-def parse_subito_html_fallback(page, ref_name):
+def parse_subito_html_fallback(page, ref_name, min_price=500):
     """
     Fallback robusto basato su regex sull'URL dell'annuncio, NON su nomi di
     classe CSS (quelli sono class-hash generati da Next.js e cambiano ad ogni
@@ -361,7 +382,7 @@ def parse_subito_html_fallback(page, ref_name):
                 break
 
         price_val = parse_eu_price(card_text)
-        if price_val and price_val > 500:
+        if price_val and price_val > min_price:
             seen.add(full_link)
             results.append({
                 "piattaforma": "Subito.it",
@@ -380,6 +401,7 @@ def parse_subito_html_fallback(page, ref_name):
 
 def fetch_subito_playwright(ref_name, info):
     results = []
+    min_price = info["min_price"]
     # FIX 1: query "marca + referenza" invece della sola referenza nuda,
     # che su Subito restituisce quasi sempre 0 risultati specifici.
     search_query = build_marketplace_query(ref_name, info)
@@ -431,7 +453,7 @@ def fetch_subito_playwright(ref_name, info):
                         break
             for item in candidates:
                 if isinstance(item, dict):
-                    parsed = parse_subito_json_item(item, ref_name)
+                    parsed = parse_subito_json_item(item, ref_name, min_price)
                     if parsed:
                         results.append(parsed)
 
@@ -456,7 +478,7 @@ def fetch_subito_playwright(ref_name, info):
                                     page_props.get("searchResults", {}).get("items", [])
                             )
                             for item in items:
-                                parsed = parse_subito_json_item(item, ref_name)
+                                parsed = parse_subito_json_item(item, ref_name, min_price)
                                 if parsed:
                                     results.append(parsed)
                         except Exception as e:
@@ -464,7 +486,7 @@ def fetch_subito_playwright(ref_name, info):
 
             # FIX 2: fallback HTML basato su URL-pattern stabile, non su classi CSS
             if not results:
-                results = parse_subito_html_fallback(page, ref_name)
+                results = parse_subito_html_fallback(page, ref_name, min_price)
 
         except Exception as e:
             print(f"  [Subito Playwright Error] Impossibile recuperare {ref_name}: {e}")
@@ -678,7 +700,7 @@ def fetch_ebay(session, ref_name, info):
                     continue
 
                 # Manteniamo il filtro originale dello scraper.
-                if p_val < 500:
+                if p_val <= min_price:
                     continue
 
                 # Località: nuovo markup -> righe attributo/footer;
@@ -755,7 +777,7 @@ def run_watch_scanner():
     for ref_name, info in TARGET_REFERENCES.items():
         print(f"Scansione in corso per: {ref_name}...")
 
-        chrono_items, market_price = fetch_chrono24(session, ref_name, info)
+        chrono_items, average_price = fetch_chrono24(session, ref_name, info)
         subito_items = fetch_subito_playwright(ref_name, info)
         ebay_items = fetch_ebay(session, ref_name, info)
 
@@ -763,12 +785,12 @@ def run_watch_scanner():
         all_items.sort(key=lambda x: x["prezzo_val"])
 
         for item in all_items:
-            item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], market_price)
+            item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], average_price)
 
         top_10 = all_items[:10]
 
         report_data[ref_name] = {
-            "market_price": market_price,
+            "average_price": average_price,
             "items": top_10
         }
 
@@ -788,10 +810,13 @@ if __name__ == "__main__":
 
     for ref_name, data in report.items():
         items = data["items"]
-        avg_price_formatted = f"€ {data['market_price']:,.0f}".replace(",", ".")
+        average_price = data["average_price"]
+        avg_price_formatted = (
+            f"€ {average_price:,.0f}".replace(",", ".") if average_price else "N/D"
+        )
 
         print(
-            f"\n--- {ref_name.upper()} (Prime {len(items)} offerte trovate) --- Prezzo medio stimato: {avg_price_formatted}")
+            f"\n--- {ref_name.upper()} (Prime {len(items)} offerte trovate) --- Prezzo medio Chrono24: {avg_price_formatted}")
 
         if items:
             for idx, item in enumerate(items, 1):
