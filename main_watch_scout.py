@@ -67,6 +67,16 @@ TARGET_REFERENCES = {
         "slug": "rolex/ref-126333.htm",
         "query": "126333",
         "min_price": 2000
+    },
+    "Tudor Black Bay (79220R) Smiley": {
+        "slug": "tudor/ref-79220r.htm",
+        "query": "79220R",
+        "min_price": 1000
+    },
+    "Seiko Cement/Lunar (SRPG63K1)": {
+        "slug": "seiko/ref-srpg63k1.htm",
+        "query": "SRPG63K1",
+        "min_price": 50
     }
 }
 
@@ -211,16 +221,16 @@ def _extract_chrono24_average_price(search_results, listings):
 
 
 
-
 def fetch_chrono24(session, ref_name, info):
     """
-    Scraper Chrono24 tramite Playwright/Chrome.
+    Scraper Chrono24 tramite Playwright + Chrome persistente.
 
-    Mantiene la stessa interfaccia della versione originale:
-        return listings, average_price
+    Prima prova a collegarsi a un Chrome già avviato su localhost:9222.
+    Se non esiste, apre una propria sessione Chrome visibile con profilo
+    persistente, riutilizzato tra le esecuzioni.
 
-    La sessione curl_cffi viene mantenuta nell'architettura generale, ma
-    Chrono24 viene interrogato con un browser Chrome reale tramite Playwright.
+    Ritorna:
+        listings, average_price
     """
     url = (
         f"https://www.chrono24.it/{info['slug']}"
@@ -233,10 +243,9 @@ def fetch_chrono24(session, ref_name, info):
     def parse_html(html_content):
         parsed_listings = []
         parsed_average = None
-
         soup = BeautifulSoup(html_content, "html.parser")
 
-        # --- Percorso strutturato: __NEXT_DATA__ ---
+        # Percorso strutturato: __NEXT_DATA__
         script_json = soup.find("script", id="__NEXT_DATA__")
         if script_json:
             try:
@@ -283,7 +292,7 @@ def fetch_chrono24(session, ref_name, info):
                         or item.get("shippingCountry")
                     )
 
-                    listings.append({
+                    parsed_listings.append({
                         "piattaforma": "Chrono24",
                         "modello": ref_name,
                         "prezzo_val": price_val,
@@ -306,16 +315,16 @@ def fetch_chrono24(session, ref_name, info):
                     })
 
                 parsed_average = _extract_chrono24_average_price(
-                    search_results, listings
+                    search_results, parsed_listings
                 )
 
-                if listings:
-                    return listings, parsed_average
+                if parsed_listings:
+                    return parsed_listings, parsed_average
 
             except Exception as exc:
                 print(f"  [Chrono24 JSON Error] {exc}")
 
-        # --- Fallback HTML ---
+        # Fallback HTML
         product_links = soup.find_all(
             "a", href=re.compile(r"-id\d+\.htm")
         )
@@ -343,7 +352,7 @@ def fetch_chrono24(session, ref_name, info):
                 continue
 
             seen_links.add(full_link)
-            listings.append({
+            parsed_listings.append({
                 "piattaforma": "Chrono24",
                 "modello": ref_name,
                 "prezzo_val": price_val,
@@ -355,80 +364,80 @@ def fetch_chrono24(session, ref_name, info):
                 "link": full_link
             })
 
-        if listings:
+        if parsed_listings:
             parsed_average = (
-                sum(item["prezzo_val"] for item in listings)
-                / len(listings)
+                sum(item["prezzo_val"] for item in parsed_listings)
+                / len(parsed_listings)
             )
 
-        return listings, parsed_average
+        return parsed_listings, parsed_average
 
     with sync_playwright() as p:
         browser = None
+        context = None
+        attached_to_existing_browser = False
+        persistent_context = False
 
         try:
-            # Usa Chrome installato sul PC, invece del Chromium bundled.
-            # È importante perché la pagina aperta manualmente dall'utente
-            # funziona correttamente.
-            browser = p.chromium.launch(
-                channel="chrome",
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-features=AutomationControlled"
-                ]
-            )
+            # 1) Preferenza: Chrome reale già aperto con remote debugging.
+            # Da Chrome 136 il remote debugging richiede un user-data-dir
+            # non standard; non tentiamo quindi di agganciarci al profilo
+            # Chrome personale senza una configurazione esplicita.
+            try:
+                browser = p.chromium.connect_over_cdp(
+                    "http://127.0.0.1:9222",
+                    timeout=2500
+                )
+                attached_to_existing_browser = True
+            except Exception:
+                browser = None
 
-            context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/124.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1920, "height": 1080},
-                locale="it-IT",
-                timezone_id="Europe/Rome",
-                extra_http_headers={
-                    "Accept-Language":
-                        "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
-                }
-            )
+            if attached_to_existing_browser:
+                contexts = browser.contexts
+                if not contexts:
+                    raise RuntimeError(
+                        "Chrome CDP collegato ma senza browser context."
+                    )
+                context = contexts[0]
+            else:
+                # 2) Fallback: Chrome visibile con profilo persistente.
+                # Niente headless e nessun nuovo context temporaneo.
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir="chrono24_chrome_profile",
+                    channel="chrome",
+                    headless=False,
+                    viewport={"width": 1920, "height": 1080},
+                    locale="it-IT",
+                    timezone_id="Europe/Rome",
+                    ignore_default_args=["--enable-automation"],
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-features=AutomationControlled"
+                    ]
+                )
+                persistent_context = True
 
-            page = context.new_page()
-            page.add_init_script("""
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                });
-                Object.defineProperty(navigator, 'languages', {
-                    get: () => ['it-IT', 'it', 'en-US', 'en']
-                });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
-                });
-            """)
+            pages = context.pages
+            page = pages[0] if pages else context.new_page()
 
-            # Warm-up: prima la home, poi la pagina della referenza.
-            home_response = page.goto(
+            # Navigazione nella stessa sessione persistente.
+            response = page.goto(
                 "https://www.chrono24.it/",
                 timeout=30000,
                 wait_until="domcontentloaded"
             )
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(2000)
 
-            # Prova a chiudere il consenso cookie, se presente.
+            # Cookie banner.
             for selector in (
+                "button:has-text('Accetta tutti')",
                 "button:has-text('Accetta')",
                 "button:has-text('Accetto')",
-                "button:has-text('Accetta tutti')",
-                "button[id*='accept']",
                 "[aria-label*='Accetta']"
             ):
                 try:
                     button = page.locator(selector).first
-                    if button.count() and button.is_visible():
+                    if button.is_visible():
                         button.click(timeout=1500)
                         page.wait_for_timeout(500)
                         break
@@ -440,16 +449,11 @@ def fetch_chrono24(session, ref_name, info):
                 timeout=30000,
                 wait_until="domcontentloaded"
             )
-            page.wait_for_timeout(3500)
+            page.wait_for_timeout(4000)
 
             status = response.status if response else None
-
-            # page.content() è intenzionale: il parser lavora sulla pagina
-            # realmente ricevuta da Chrome, non sulla response raw.
             html_content = page.content()
 
-            # Se il server ci restituisce 403/challenge, prova a identificare
-            # chiaramente il blocco invece di trasformarlo in "0 risultati".
             body_text = ""
             try:
                 body_text = page.locator("body").inner_text(timeout=3000) or ""
@@ -470,9 +474,16 @@ def fetch_chrono24(session, ref_name, info):
                 marker in body_lower for marker in challenge_markers
             ):
                 print(
-                    "  [Chrono24 Warning] Chrome/Playwright bloccato"
-                    f" (HTTP {status if status is not None else 'N/D'})"
+                    "  [Chrono24 Warning] La sessione Chrome è stata bloccata"
+                    f" (HTTP {status if status is not None else 'N/D'})."
                 )
+                if not attached_to_existing_browser:
+                    print(
+                        "  [Chrono24 Info] Il profilo persistente è "
+                        "'chrono24_chrome_profile'. Aprilo manualmente "
+                        "una volta, completa eventuale verifica/cookie, "
+                        "poi riesegui lo scanner."
+                    )
                 return listings, average_price
 
             listings, average_price = parse_html(html_content)
@@ -480,10 +491,15 @@ def fetch_chrono24(session, ref_name, info):
         except Exception as exc:
             print(f"  [Chrono24 Playwright Error] {ref_name}: {exc}")
         finally:
-            if browser is not None:
+            if persistent_context and context is not None:
+                context.close()
+            elif browser is not None and not attached_to_existing_browser:
                 browser.close()
+            # Se ci siamo collegati via CDP, NON chiudiamo il Chrome
+            # dell'utente.
 
     return listings, average_price
+
 
 
 
