@@ -219,15 +219,17 @@ def _extract_chrono24_average_price(search_results, listings):
 
 
 
-
-
 def fetch_chrono24(session, ref_name, info):
     """
     Scraper Chrono24 tramite Playwright + Chrome persistente.
 
     Prima prova a collegarsi a un Chrome già avviato su localhost:9222.
-    Se non esiste, apre una propria sessione Chrome visibile con profilo
-    persistente, riutilizzato tra le esecuzioni.
+    Se non esiste, apre una propria sessione Chrome con profilo
+    persistente (riutilizzato tra le esecuzioni), MINIMIZZATA via CDP
+    per non intasare lo schermo mentre lo scanner gira. Restare in
+    modalità non-headless (solo minimizzata, non nascosta del tutto)
+    è importante: è ciò che permette di superare il blocco 403, che
+    scattava proprio col vero headless.
 
     Ritorna:
         listings, average_price
@@ -372,6 +374,24 @@ def fetch_chrono24(session, ref_name, info):
 
         return parsed_listings, parsed_average
 
+    def minimize_window(context, page):
+        """
+        Minimizza la finestra Chrome via CDP (Browser.setWindowBounds),
+        senza passare per headless=True: il fingerprint del browser resta
+        quello di un Chrome reale visibile, solo non in primo piano.
+        Va chiamata SOLO sulla finestra che abbiamo aperto noi, mai su un
+        Chrome a cui ci siamo collegati via CDP esterno.
+        """
+        try:
+            cdp_session = context.new_cdp_session(page)
+            window_id = cdp_session.send("Browser.getWindowForTarget")["windowId"]
+            cdp_session.send("Browser.setWindowBounds", {
+                "windowId": window_id,
+                "bounds": {"windowState": "minimized"}
+            })
+        except Exception as exc:
+            print(f"  [Chrono24 Info] Impossibile minimizzare la finestra: {exc}")
+
     with sync_playwright() as p:
         browser = None
         context = None
@@ -400,8 +420,8 @@ def fetch_chrono24(session, ref_name, info):
                     )
                 context = contexts[0]
             else:
-                # 2) Fallback: Chrome visibile con profilo persistente.
-                # Niente headless e nessun nuovo context temporaneo.
+                # 2) Fallback: Chrome con profilo persistente, minimizzato
+                # (non headless: serve un browser reale per il bypass 403).
                 context = p.chromium.launch_persistent_context(
                     user_data_dir="chrono24_chrome_profile",
                     channel="chrome",
@@ -412,13 +432,20 @@ def fetch_chrono24(session, ref_name, info):
                     ignore_default_args=["--enable-automation"],
                     args=[
                         "--disable-blink-features=AutomationControlled",
-                        "--disable-features=AutomationControlled"
+                        "--disable-features=AutomationControlled",
+                        # Riduce il flash iniziale prima che il CDP minimizzi
+                        "--window-position=-32000,-32000"
                     ]
                 )
                 persistent_context = True
 
             pages = context.pages
             page = pages[0] if pages else context.new_page()
+
+            # Minimizza SUBITO, prima di navigare: solo per la finestra
+            # che abbiamo aperto noi, mai su un Chrome esterno agganciato.
+            if persistent_context and not attached_to_existing_browser:
+                minimize_window(context, page)
 
             # Navigazione nella stessa sessione persistente.
             response = page.goto(
@@ -481,8 +508,9 @@ def fetch_chrono24(session, ref_name, info):
                     print(
                         "  [Chrono24 Info] Il profilo persistente è "
                         "'chrono24_chrome_profile'. Aprilo manualmente "
-                        "una volta, completa eventuale verifica/cookie, "
-                        "poi riesegui lo scanner."
+                        "una volta (window-position normale, rimuovi "
+                        "temporaneamente il minimize per vederlo), completa "
+                        "eventuale verifica/cookie, poi riesegui lo scanner."
                     )
                 return listings, average_price
 
@@ -499,7 +527,6 @@ def fetch_chrono24(session, ref_name, info):
             # dell'utente.
 
     return listings, average_price
-
 
 
 
@@ -1147,11 +1174,11 @@ def run_watch_scanner():
         for item in all_items:
             item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], market_price)
 
-        top_10 = all_items[:10]
+        top_20 = all_items[:20]
 
         report_data[ref_name] = {
             "average_price": market_price,
-            "items": top_10
+            "items": top_20
         }
 
         print(
@@ -1174,7 +1201,7 @@ if __name__ == "__main__":
     report = run_watch_scanner()
 
     print("\n" + "=" * 125)
-    print(" REPORT MULTI-PIATTAFORMA (UE) - PRIME 10 OFFERTE MENO CARE PER REFERENZA")
+    print(" REPORT MULTI-PIATTAFORMA (UE) - PRIME 20 OFFERTE MENO CARE PER REFERENZA")
     print("=" * 125 + "\n")
 
     for ref_name, data in report.items():
