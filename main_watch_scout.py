@@ -207,104 +207,269 @@ def _extract_chrono24_average_price(search_results, listings):
     return sum(prices) / len(prices) if prices else None
 
 
+
 def fetch_chrono24(session, ref_name, info):
+    """
+    Scraper Chrono24 tramite Playwright.
+
+    Mantiene la stessa interfaccia della versione precedente:
+        return listings, average_price
+
+    La sessione HTTP curl_cffi viene lasciata come argomento per compatibilità
+    con l'architettura esistente, ma non viene usata per il GET principale:
+    Chrono24 viene aperto tramite Playwright per evitare il 403 osservato
+    sulle richieste HTTP automatizzate.
+    """
     url = f"https://www.chrono24.it/{info['slug']}?dosearch=true&countryIds=EU&sortorder=1"
     min_price = info["min_price"]
     listings = []
     average_price = None
 
-    try:
-        response = session.get(url, headers=HEADERS, timeout=12)
-        if response.status_code != 200:
-            print(f"  [Chrono24 Warning] HTTP Status: {response.status_code}")
-            return listings, average_price
+    def parse_next_data(html_text):
+        """Estrae gli annunci dai dati __NEXT_DATA__ di Chrono24."""
+        parsed_listings = []
+        parsed_average = None
 
-        soup = BeautifulSoup(response.text, "html.parser")
+        soup = BeautifulSoup(html_text, "html.parser")
         script_json = soup.find("script", id="__NEXT_DATA__")
+        if not script_json:
+            return parsed_listings, parsed_average
 
-        if script_json:
+        content = script_json.string or script_json.get_text() or ""
+        if not content.strip():
+            return parsed_listings, parsed_average
+
+        data = json.loads(content)
+        page_props = data.get("props", {}).get("pageProps", {}) or {}
+        search_results = page_props.get("searchResults", {}) or {}
+        articles = search_results.get("articles", []) or []
+
+        for item in articles:
+            if not isinstance(item, dict):
+                continue
+
+            price_obj = item.get("price", {})
+            price_val = (
+                price_obj.get("amount", 0)
+                if isinstance(price_obj, dict)
+                else price_obj
+            )
+
+            url_path = item.get("url", "")
+            title = item.get("title", "")
+            subtitle = item.get("subtitle", "")
+            full_text = f"{title} {subtitle}"
+
             try:
-                data = json.loads(script_json.string or "{}")
-                page_props = data.get("props", {}).get("pageProps", {})
-                search_results = page_props.get("searchResults", {}) or {}
-                articles = search_results.get("articles", []) or []
+                price_val = float(price_val)
+            except (TypeError, ValueError):
+                continue
 
-                for item in articles:
-                    price_obj = item.get("price", {})
-                    price_val = price_obj.get("amount", 0) if isinstance(price_obj, dict) else price_obj
-                    url_path = item.get("url", "")
-                    title = item.get("title", "")
-                    subtitle = item.get("subtitle", "")
-                    full_text = f"{title} {subtitle}"
+            if price_val <= min_price or not url_path:
+                continue
 
-                    try:
-                        price_val = float(price_val)
-                    except (TypeError, ValueError):
-                        continue
+            link = (
+                f"https://www.chrono24.it{url_path}"
+                if url_path.startswith("/")
+                else url_path
+            )
 
-                    if price_val > min_price and url_path:
-                        link = f"https://www.chrono24.it{url_path}" if url_path.startswith("/") else url_path
-                        seller_obj = item.get("seller", {}) or {}
-                        raw_country = seller_obj.get("country") or item.get("country") or item.get("shippingCountry")
-                        country = extract_country_name(raw_country)
-                        seller_type = extract_seller_type(
-                            item.get("isProfessional") or seller_obj.get("isProfessional"))
-                        listings.append({
-                            "piattaforma": "Chrono24",
-                            "modello": ref_name,
-                            "prezzo_val": price_val,
-                            "paese": country,
-                            "tipo_venditore": seller_type,
-                            "anno": str(item.get("year") or extract_year(full_text)),
-                            "quadrante": item.get("dialColor") or extract_dial_color(full_text),
-                            "dotazione": extract_scope_of_delivery(item.get("scopeOfDelivery", full_text)),
-                            "link": link
-                        })
+            seller_obj = item.get("seller", {}) or {}
+            raw_country = (
+                seller_obj.get("country")
+                or item.get("country")
+                or item.get("shippingCountry")
+            )
 
-                # Preferisce il prezzo medio che Chrono24 espone nei propri dati.
-                average_price = _extract_chrono24_average_price(search_results, listings)
-                if listings:
-                    return listings, average_price
-            except Exception as e:
-                print(f"  [Chrono24 JSON Error]: {e}")
+            parsed_listings.append({
+                "piattaforma": "Chrono24",
+                "modello": ref_name,
+                "prezzo_val": price_val,
+                "paese": extract_country_name(raw_country),
+                "tipo_venditore": extract_seller_type(
+                    item.get("isProfessional")
+                    or seller_obj.get("isProfessional")
+                ),
+                "anno": str(item.get("year") or extract_year(full_text)),
+                "quadrante": item.get("dialColor") or extract_dial_color(full_text),
+                "dotazione": extract_scope_of_delivery(
+                    item.get("scopeOfDelivery", full_text)
+                ),
+                "link": link
+            })
 
-        # Fallback HTML
+        parsed_average = _extract_chrono24_average_price(
+            search_results,
+            parsed_listings
+        )
+        return parsed_listings, parsed_average
+
+
+    def parse_html_fallback(html_text):
+        """Fallback HTML, mantenendo la logica già presente nello scraper."""
+        parsed_listings = []
+        soup = BeautifulSoup(html_text, "html.parser")
         product_links = soup.find_all("a", href=re.compile(r"-id\d+\.htm"))
         seen_links = set()
 
         for link_tag in product_links:
             href = link_tag.get("href", "")
-            full_link = f"https://www.chrono24.it{href}" if href.startswith("/") else href
+            full_link = (
+                f"https://www.chrono24.it{href}"
+                if href.startswith("/")
+                else href
+            )
+
             if full_link in seen_links:
                 continue
 
             container = link_tag.find_parent(["div", "article"])
             if not container:
                 continue
+
             text_content = container.get_text(" ", strip=True)
             price_val = parse_eu_price(text_content)
 
-            if price_val is not None and price_val > min_price:
-                seen_links.add(full_link)
-                listings.append({
-                    "piattaforma": "Chrono24",
-                    "modello": ref_name,
-                    "prezzo_val": price_val,
-                    "paese": extract_country_name(text_content),
-                    "tipo_venditore": extract_seller_type(text_content),
-                    "anno": extract_year(text_content),
-                    "quadrante": extract_dial_color(text_content),
-                    "dotazione": extract_scope_of_delivery(text_content),
-                    "link": full_link
-                })
+            if price_val is None or price_val <= min_price:
+                continue
 
-        if listings:
-            average_price = sum(item["prezzo_val"] for item in listings) / len(listings)
+            seen_links.add(full_link)
+            parsed_listings.append({
+                "piattaforma": "Chrono24",
+                "modello": ref_name,
+                "prezzo_val": price_val,
+                "paese": extract_country_name(text_content),
+                "tipo_venditore": extract_seller_type(text_content),
+                "anno": extract_year(text_content),
+                "quadrante": extract_dial_color(text_content),
+                "dotazione": extract_scope_of_delivery(text_content),
+                "link": full_link
+            })
 
-    except Exception as e:
-        print(f"  [Chrono24 Error] {ref_name}: {e}")
+        if parsed_listings:
+            parsed_average = (
+                sum(item["prezzo_val"] for item in parsed_listings)
+                / len(parsed_listings)
+            )
+        else:
+            parsed_average = None
+
+        return parsed_listings, parsed_average
+
+    with sync_playwright() as p:
+        browser = None
+        try:
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage"
+                ]
+            )
+
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/124.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1920, "height": 1080},
+                locale="it-IT",
+                timezone_id="Europe/Rome",
+                extra_http_headers={
+                    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+                }
+            )
+
+            page = context.new_page()
+            page.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+            """)
+
+            # Warm-up sulla home per creare una sessione/cookie prima della
+            # navigazione diretta alla pagina della referenza.
+            home_response = page.goto(
+                "https://www.chrono24.it/",
+                timeout=30000,
+                wait_until="domcontentloaded"
+            )
+            page.wait_for_timeout(1800)
+
+            # Chiude, se presente, un eventuale banner cookie.
+            try:
+                for selector in (
+                    "button:has-text('Accetta')",
+                    "button:has-text('Accetto')",
+                    "button[id*='accept']",
+                    "[aria-label*='Accetta']"
+                ):
+                    button = page.locator(selector).first
+                    if button.count() and button.is_visible():
+                        button.click()
+                        page.wait_for_timeout(500)
+                        break
+            except Exception:
+                pass
+
+            response = page.goto(
+                url,
+                timeout=30000,
+                wait_until="domcontentloaded"
+            )
+            page.wait_for_timeout(2500)
+
+            status = response.status if response else None
+            body_text = ""
+            try:
+                body_text = page.locator("body").inner_text(timeout=5000) or ""
+            except Exception:
+                pass
+
+            body_lower = body_text.lower()
+            block_markers = (
+                "access denied",
+                "forbidden",
+                "403",
+                "verify you are human",
+                "verify you're human",
+                "captcha",
+                "unusual traffic"
+            )
+
+            if status == 403 or any(marker in body_lower for marker in block_markers):
+                print(
+                    f"  [Chrono24 Warning] Accesso Playwright bloccato"
+                    f" (HTTP {status if status is not None else 'N/D'})"
+                )
+                return listings, average_price
+
+            html_content = page.content()
+
+            # Prima via: __NEXT_DATA__, che conserva il metodo di estrazione
+            # strutturato già usato dalla versione HTTP.
+            try:
+                listings, average_price = parse_next_data(html_content)
+            except Exception as e:
+                print(f"  [Chrono24 JSON Error] {e}")
+
+            # Seconda via: parser HTML legacy.
+            if not listings:
+                listings, fallback_average = parse_html_fallback(html_content)
+                if fallback_average is not None:
+                    average_price = fallback_average
+
+        except Exception as e:
+            print(f"  [Chrono24 Playwright Error] {ref_name}: {e}")
+        finally:
+            if browser is not None:
+                browser.close()
 
     return listings, average_price
+
 
 
 # --- SCRAPER VINTED.IT (Playwright + Network Interception + Fallback HTML) ---
@@ -360,7 +525,7 @@ def fetch_vinted(session, ref_name, info):
                             continue
 
                         # Filtro di sicurezza per escludere accessori/ricambi
-                        if p_val < 500:
+                        if p_val <= info["min_price"]:
                             continue
 
                         item_url = item.get("url")
@@ -424,7 +589,7 @@ def fetch_vinted(session, ref_name, info):
                         except ValueError:
                             continue
 
-                        if p_val < 500:
+                        if p_val <= info["min_price"]:
                             continue
 
                         seen_links.add(clean_link)
@@ -953,7 +1118,7 @@ def run_watch_scanner():
         top_10 = all_items[:10]
 
         report_data[ref_name] = {
-            "market_price": market_price,
+            "average_price": market_price,
             "items": top_10
         }
 
