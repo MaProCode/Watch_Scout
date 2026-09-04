@@ -24,41 +24,49 @@ EU_COUNTRY_MAP = {
     "EE": "Estonia 🇪🇪", "CY": "Cipro 🇨🇾", "MT": "Malta 🇲🇹"
 }
 
+#TARGET_REFERENCES = {
+#    "Rolex Datejust 41 (126333) Steel&Gold flutè": {
+#        "slug": "rolex/ref-126333.htm",
+#        "query": "126333",
+#        "min_price": 2000
+#    },
+#    "Rolex Datejust 41 (126334) Steel flutè": {
+#        "slug": "rolex/ref-126334.htm",
+#        "query": "126334",
+#        "min_price": 2000
+#    },
+#    "Rolex Datejust 41 (126300) Steel smooth": {
+#        "slug": "rolex/ref-126300.htm",
+#        "query": "126300",
+#        "min_price": 2000
+#    },
+#    "Cartier Santos Medium (WSSA0029) 35mm": {
+#        "slug": "cartier/ref-wssa0029.htm",
+#        "query": "WSSA0029",
+#        "min_price": 2000
+#    },
+#    "Cartier Santos 100 (2878) 33mm": {
+#        "slug": "cartier/ref-2878.htm",
+#        "query": "Cartier 2878",
+#        "min_price": 1000
+#    },
+#    "Tudor Black Bay (79220R) Smiley": {
+#        "slug": "tudor/ref-79220r.htm",
+#        "query": "79220R",
+#        "min_price": 1000
+#    },
+#    "Seiko Cement/Lunar (SRPG63K1)": {
+#        "slug": "seiko/ref-srpg63k1.htm",
+#        "query": "SRPG63K1",
+#        "min_price": 50
+#    }
+#}
+
 TARGET_REFERENCES = {
     "Rolex Datejust 41 (126333) Steel&Gold flutè": {
         "slug": "rolex/ref-126333.htm",
         "query": "126333",
         "min_price": 2000
-    },
-    "Rolex Datejust 41 (126334) Steel flutè": {
-        "slug": "rolex/ref-126334.htm",
-        "query": "126334",
-        "min_price": 2000
-    },
-    "Rolex Datejust 41 (126300) Steel smooth": {
-        "slug": "rolex/ref-126300.htm",
-        "query": "126300",
-        "min_price": 2000
-    },
-    "Cartier Santos Medium (WSSA0029) 35mm": {
-        "slug": "cartier/ref-wssa0029.htm",
-        "query": "WSSA0029",
-        "min_price": 2000
-    },
-    "Cartier Santos 100 (2878) 33mm": {
-        "slug": "cartier/ref-2878.htm",
-        "query": "Cartier 2878",
-        "min_price": 1000
-    },
-    "Tudor Black Bay (79220R) Smiley": {
-        "slug": "tudor/ref-79220r.htm",
-        "query": "79220R",
-        "min_price": 1000
-    },
-    "Seiko Cement/Lunar (SRPG63K1)": {
-        "slug": "seiko/ref-srpg63k1.htm",
-        "query": "SRPG63K1",
-        "min_price": 50
     }
 }
 
@@ -297,6 +305,158 @@ def fetch_chrono24(session, ref_name, info):
         print(f"  [Chrono24 Error] {ref_name}: {e}")
 
     return listings, average_price
+
+
+# --- SCRAPER VINTED.IT (Playwright + Network Interception + Fallback HTML) ---
+
+def fetch_vinted(session, ref_name, info):
+    results = []
+    query = urllib.parse.quote_plus(info["query"])
+    # Ordina per prezzo crescente
+    url = f"https://www.vinted.it/catalog?search_text={query}&order=price_low_to_high"
+
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
+        )
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1920, "height": 1080},
+            locale="it-IT",
+            timezone_id="Europe/Rome",
+            extra_http_headers={
+                "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+            }
+        )
+        page = context.new_page()
+
+        # Elude il rilevamento navigator.webdriver
+        page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        """)
+
+        # Intercettazione delle risposte API di Vinted
+        def handle_response(response):
+            if "api/v2/catalog/items" in response.url:
+                try:
+                    data = response.json()
+                    items = data.get("items", [])
+                    for item in items:
+                        title = item.get("title", "")
+                        price_obj = item.get("price", {})
+                        raw_price = price_obj.get("amount") if isinstance(price_obj, dict) else item.get("price")
+
+                        if not raw_price:
+                            continue
+
+                        try:
+                            p_val = float(raw_price)
+                        except (ValueError, TypeError):
+                            continue
+
+                        # Filtro di sicurezza per escludere accessori/ricambi
+                        if p_val < 500:
+                            continue
+
+                        item_url = item.get("url")
+                        if not item_url and item.get("id"):
+                            item_url = f"https://www.vinted.it/items/{item.get('id')}"
+
+                        if not item_url:
+                            continue
+
+                        user_info = item.get("user", {})
+                        country_title = user_info.get("country_title") or "Italia"
+                        country = extract_country_name(country_title)
+
+                        description = item.get("description", "")
+                        full_text = f"{title} {description}"
+
+                        results.append({
+                            "piattaforma": "Vinted",
+                            "modello": ref_name,
+                            "prezzo_val": p_val,
+                            "paese": country,
+                            "tipo_venditore": "Privato",
+                            "anno": extract_year(full_text),
+                            "quadrante": extract_dial_color(full_text),
+                            "dotazione": extract_scope_of_delivery(full_text),
+                            "link": item_url
+                        })
+                except Exception:
+                    pass
+
+        page.on("response", handle_response)
+
+        try:
+            page.goto(url, timeout=30000, wait_until="domcontentloaded")
+            page.wait_for_timeout(3000)
+
+            # Fallback HTML se l'API non è stata intercettata
+            if not results:
+                html_content = page.content()
+                soup = BeautifulSoup(html_content, "html.parser")
+                grid_items = soup.select("[data-testid*='grid-item'], div.feed-grid__item")
+                seen_links = set()
+
+                for g_item in grid_items:
+                    link_el = g_item.select_one("a[href*='/items/']")
+                    if not link_el:
+                        continue
+                    href = link_el.get("href", "")
+                    clean_link = f"https://www.vinted.it{href}" if href.startswith("/") else href
+
+                    if clean_link in seen_links:
+                        continue
+
+                    text_content = g_item.get_text(" ", strip=True)
+                    price_match = re.search(r"([\d\.\,]+)\s?€|€\s?([\d\.\,]+)", text_content)
+                    if price_match:
+                        raw_p = price_match.group(1) or price_match.group(2)
+                        raw_p = raw_p.replace(".", "").replace(",", ".")
+                        try:
+                            p_val = float(raw_p)
+                        except ValueError:
+                            continue
+
+                        if p_val < 500:
+                            continue
+
+                        seen_links.add(clean_link)
+                        results.append({
+                            "piattaforma": "Vinted",
+                            "modello": ref_name,
+                            "prezzo_val": p_val,
+                            "paese": extract_country_name(text_content),
+                            "tipo_venditore": "Privato",
+                            "anno": extract_year(text_content),
+                            "quadrante": extract_dial_color(text_content),
+                            "dotazione": extract_scope_of_delivery(text_content),
+                            "link": clean_link
+                        })
+
+        except Exception as e:
+            print(f"  [Vinted Playwright Error] Impossibile recuperare {ref_name}: {e}")
+        finally:
+            browser.close()
+
+    # Rimuove eventuali duplicati
+    unique_results = []
+    seen = set()
+    for item in results:
+        if item["link"] not in seen:
+            seen.add(item["link"])
+            unique_results.append(item)
+
+    return unique_results
+
+
+
 # --- SCRAPER SUBITO.IT (CORRETTO) ---
 
 def parse_subito_json_item(item, ref_name, min_price=500):
@@ -778,28 +938,39 @@ def run_watch_scanner():
     for ref_name, info in TARGET_REFERENCES.items():
         print(f"Scansione in corso per: {ref_name}...")
 
-        chrono_items, average_price = fetch_chrono24(session, ref_name, info)
+        chrono_items, market_price = fetch_chrono24(session, ref_name, info)
         subito_items = fetch_subito_playwright(ref_name, info)
         ebay_items = fetch_ebay(session, ref_name, info)
+        vinted_items = fetch_vinted(session, ref_name, info)  # Scraper Vinted
 
-        all_items = chrono_items + subito_items + ebay_items
+        # Unione dei risultati di tutte e 4 le piattaforme
+        all_items = chrono_items + subito_items + ebay_items + vinted_items
         all_items.sort(key=lambda x: x["prezzo_val"])
 
         for item in all_items:
-            item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], average_price)
+            item["prezzo_str"] = calculate_discount_format(item["prezzo_val"], market_price)
 
         top_10 = all_items[:10]
 
         report_data[ref_name] = {
-            "average_price": average_price,
+            "market_price": market_price,
             "items": top_10
         }
 
-        print(f"  -> Estratti {len(chrono_items)} su Chrono24, {len(subito_items)} su Subito.it, "
-              f"{len(ebay_items)} su eBay.it.")
+        print(
+            f"  -> Estratti {len(chrono_items)} su Chrono24, "
+            f"{len(subito_items)} su Subito.it, "
+            f"{len(ebay_items)} su eBay.it e "
+            f"{len(vinted_items)} su Vinted."
+        )
         time.sleep(random.uniform(2.5, 4.0))
 
     return report_data
+
+
+
+
+
 
 
 if __name__ == "__main__":
