@@ -208,108 +208,117 @@ def _extract_chrono24_average_price(search_results, listings):
 
 
 
+
+
+
+
 def fetch_chrono24(session, ref_name, info):
     """
-    Scraper Chrono24 tramite Playwright.
+    Scraper Chrono24 tramite Playwright/Chrome.
 
-    Mantiene la stessa interfaccia della versione precedente:
+    Mantiene la stessa interfaccia della versione originale:
         return listings, average_price
 
-    La sessione HTTP curl_cffi viene lasciata come argomento per compatibilità
-    con l'architettura esistente, ma non viene usata per il GET principale:
-    Chrono24 viene aperto tramite Playwright per evitare il 403 osservato
-    sulle richieste HTTP automatizzate.
+    La sessione curl_cffi viene mantenuta nell'architettura generale, ma
+    Chrono24 viene interrogato con un browser Chrome reale tramite Playwright.
     """
-    url = f"https://www.chrono24.it/{info['slug']}?dosearch=true&countryIds=EU&sortorder=1"
+    url = (
+        f"https://www.chrono24.it/{info['slug']}"
+        "?dosearch=true&countryIds=EU&sortorder=1"
+    )
     min_price = info["min_price"]
     listings = []
     average_price = None
 
-    def parse_next_data(html_text):
-        """Estrae gli annunci dai dati __NEXT_DATA__ di Chrono24."""
+    def parse_html(html_content):
         parsed_listings = []
         parsed_average = None
 
-        soup = BeautifulSoup(html_text, "html.parser")
+        soup = BeautifulSoup(html_content, "html.parser")
+
+        # --- Percorso strutturato: __NEXT_DATA__ ---
         script_json = soup.find("script", id="__NEXT_DATA__")
-        if not script_json:
-            return parsed_listings, parsed_average
-
-        content = script_json.string or script_json.get_text() or ""
-        if not content.strip():
-            return parsed_listings, parsed_average
-
-        data = json.loads(content)
-        page_props = data.get("props", {}).get("pageProps", {}) or {}
-        search_results = page_props.get("searchResults", {}) or {}
-        articles = search_results.get("articles", []) or []
-
-        for item in articles:
-            if not isinstance(item, dict):
-                continue
-
-            price_obj = item.get("price", {})
-            price_val = (
-                price_obj.get("amount", 0)
-                if isinstance(price_obj, dict)
-                else price_obj
-            )
-
-            url_path = item.get("url", "")
-            title = item.get("title", "")
-            subtitle = item.get("subtitle", "")
-            full_text = f"{title} {subtitle}"
-
+        if script_json:
             try:
-                price_val = float(price_val)
-            except (TypeError, ValueError):
-                continue
+                raw = script_json.string or script_json.get_text() or "{}"
+                data = json.loads(raw)
+                page_props = data.get("props", {}).get("pageProps", {}) or {}
+                search_results = page_props.get("searchResults", {}) or {}
+                articles = search_results.get("articles", []) or []
 
-            if price_val <= min_price or not url_path:
-                continue
+                for item in articles:
+                    if not isinstance(item, dict):
+                        continue
 
-            link = (
-                f"https://www.chrono24.it{url_path}"
-                if url_path.startswith("/")
-                else url_path
-            )
+                    price_obj = item.get("price", {})
+                    price_val = (
+                        price_obj.get("amount")
+                        if isinstance(price_obj, dict)
+                        else price_obj
+                    )
 
-            seller_obj = item.get("seller", {}) or {}
-            raw_country = (
-                seller_obj.get("country")
-                or item.get("country")
-                or item.get("shippingCountry")
-            )
+                    try:
+                        price_val = float(price_val)
+                    except (TypeError, ValueError):
+                        continue
 
-            parsed_listings.append({
-                "piattaforma": "Chrono24",
-                "modello": ref_name,
-                "prezzo_val": price_val,
-                "paese": extract_country_name(raw_country),
-                "tipo_venditore": extract_seller_type(
-                    item.get("isProfessional")
-                    or seller_obj.get("isProfessional")
-                ),
-                "anno": str(item.get("year") or extract_year(full_text)),
-                "quadrante": item.get("dialColor") or extract_dial_color(full_text),
-                "dotazione": extract_scope_of_delivery(
-                    item.get("scopeOfDelivery", full_text)
-                ),
-                "link": link
-            })
+                    url_path = item.get("url", "")
+                    if price_val <= min_price or not url_path:
+                        continue
 
-        parsed_average = _extract_chrono24_average_price(
-            search_results,
-            parsed_listings
+                    title = item.get("title", "")
+                    subtitle = item.get("subtitle", "")
+                    full_text = f"{title} {subtitle}"
+
+                    link = (
+                        f"https://www.chrono24.it{url_path}"
+                        if url_path.startswith("/")
+                        else url_path
+                    )
+
+                    seller_obj = item.get("seller", {}) or {}
+                    raw_country = (
+                        seller_obj.get("country")
+                        or item.get("country")
+                        or item.get("shippingCountry")
+                    )
+
+                    listings.append({
+                        "piattaforma": "Chrono24",
+                        "modello": ref_name,
+                        "prezzo_val": price_val,
+                        "paese": extract_country_name(raw_country),
+                        "tipo_venditore": extract_seller_type(
+                            item.get("isProfessional")
+                            or seller_obj.get("isProfessional")
+                        ),
+                        "anno": str(
+                            item.get("year") or extract_year(full_text)
+                        ),
+                        "quadrante": (
+                            item.get("dialColor")
+                            or extract_dial_color(full_text)
+                        ),
+                        "dotazione": extract_scope_of_delivery(
+                            item.get("scopeOfDelivery", full_text)
+                        ),
+                        "link": link
+                    })
+
+                parsed_average = _extract_chrono24_average_price(
+                    search_results, listings
+                )
+
+                if listings:
+                    return listings, parsed_average
+
+            except Exception as exc:
+                print(f"  [Chrono24 JSON Error] {exc}")
+
+        # --- Fallback HTML ---
+        product_links = soup.find_all(
+            "a", href=re.compile(r"-id\d+\.htm")
         )
-        return parsed_listings, parsed_average
-
-
-    def parse_html_fallback(html_text):
-        """Fallback HTML, mantenendo la logica già presente nello scraper."""
-        parsed_listings = []
-        soup = BeautifulSoup(html_text, "html.parser")
-        product_links = soup.find_all("a", href=re.compile(r"-id\d+\.htm"))
         seen_links = set()
 
         for link_tag in product_links:
@@ -334,7 +343,7 @@ def fetch_chrono24(session, ref_name, info):
                 continue
 
             seen_links.add(full_link)
-            parsed_listings.append({
+            listings.append({
                 "piattaforma": "Chrono24",
                 "modello": ref_name,
                 "prezzo_val": price_val,
@@ -346,26 +355,30 @@ def fetch_chrono24(session, ref_name, info):
                 "link": full_link
             })
 
-        if parsed_listings:
+        if listings:
             parsed_average = (
-                sum(item["prezzo_val"] for item in parsed_listings)
-                / len(parsed_listings)
+                sum(item["prezzo_val"] for item in listings)
+                / len(listings)
             )
-        else:
-            parsed_average = None
 
-        return parsed_listings, parsed_average
+        return listings, parsed_average
 
     with sync_playwright() as p:
         browser = None
+
         try:
+            # Usa Chrome installato sul PC, invece del Chromium bundled.
+            # È importante perché la pagina aperta manualmente dall'utente
+            # funziona correttamente.
             browser = p.chromium.launch(
+                channel="chrome",
                 headless=True,
                 args=[
                     "--disable-blink-features=AutomationControlled",
                     "--no-sandbox",
                     "--disable-setuid-sandbox",
-                    "--disable-dev-shm-usage"
+                    "--disable-dev-shm-usage",
+                    "--disable-features=AutomationControlled"
                 ]
             )
 
@@ -379,7 +392,8 @@ def fetch_chrono24(session, ref_name, info):
                 locale="it-IT",
                 timezone_id="Europe/Rome",
                 extra_http_headers={
-                    "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
+                    "Accept-Language":
+                        "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7"
                 }
             )
 
@@ -388,87 +402,89 @@ def fetch_chrono24(session, ref_name, info):
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['it-IT', 'it', 'en-US', 'en']
+                });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
             """)
 
-            # Warm-up sulla home per creare una sessione/cookie prima della
-            # navigazione diretta alla pagina della referenza.
+            # Warm-up: prima la home, poi la pagina della referenza.
             home_response = page.goto(
                 "https://www.chrono24.it/",
                 timeout=30000,
                 wait_until="domcontentloaded"
             )
-            page.wait_for_timeout(1800)
+            page.wait_for_timeout(2500)
 
-            # Chiude, se presente, un eventuale banner cookie.
-            try:
-                for selector in (
-                    "button:has-text('Accetta')",
-                    "button:has-text('Accetto')",
-                    "button[id*='accept']",
-                    "[aria-label*='Accetta']"
-                ):
+            # Prova a chiudere il consenso cookie, se presente.
+            for selector in (
+                "button:has-text('Accetta')",
+                "button:has-text('Accetto')",
+                "button:has-text('Accetta tutti')",
+                "button[id*='accept']",
+                "[aria-label*='Accetta']"
+            ):
+                try:
                     button = page.locator(selector).first
                     if button.count() and button.is_visible():
-                        button.click()
+                        button.click(timeout=1500)
                         page.wait_for_timeout(500)
                         break
-            except Exception:
-                pass
+                except Exception:
+                    pass
 
             response = page.goto(
                 url,
                 timeout=30000,
                 wait_until="domcontentloaded"
             )
-            page.wait_for_timeout(2500)
+            page.wait_for_timeout(3500)
 
             status = response.status if response else None
+
+            # page.content() è intenzionale: il parser lavora sulla pagina
+            # realmente ricevuta da Chrome, non sulla response raw.
+            html_content = page.content()
+
+            # Se il server ci restituisce 403/challenge, prova a identificare
+            # chiaramente il blocco invece di trasformarlo in "0 risultati".
             body_text = ""
             try:
-                body_text = page.locator("body").inner_text(timeout=5000) or ""
+                body_text = page.locator("body").inner_text(timeout=3000) or ""
             except Exception:
                 pass
 
             body_lower = body_text.lower()
-            block_markers = (
+            challenge_markers = (
                 "access denied",
                 "forbidden",
-                "403",
                 "verify you are human",
                 "verify you're human",
                 "captcha",
                 "unusual traffic"
             )
 
-            if status == 403 or any(marker in body_lower for marker in block_markers):
+            if status == 403 or any(
+                marker in body_lower for marker in challenge_markers
+            ):
                 print(
-                    f"  [Chrono24 Warning] Accesso Playwright bloccato"
+                    "  [Chrono24 Warning] Chrome/Playwright bloccato"
                     f" (HTTP {status if status is not None else 'N/D'})"
                 )
                 return listings, average_price
 
-            html_content = page.content()
+            listings, average_price = parse_html(html_content)
 
-            # Prima via: __NEXT_DATA__, che conserva il metodo di estrazione
-            # strutturato già usato dalla versione HTTP.
-            try:
-                listings, average_price = parse_next_data(html_content)
-            except Exception as e:
-                print(f"  [Chrono24 JSON Error] {e}")
-
-            # Seconda via: parser HTML legacy.
-            if not listings:
-                listings, fallback_average = parse_html_fallback(html_content)
-                if fallback_average is not None:
-                    average_price = fallback_average
-
-        except Exception as e:
-            print(f"  [Chrono24 Playwright Error] {ref_name}: {e}")
+        except Exception as exc:
+            print(f"  [Chrono24 Playwright Error] {ref_name}: {exc}")
         finally:
             if browser is not None:
                 browser.close()
 
     return listings, average_price
+
 
 
 
