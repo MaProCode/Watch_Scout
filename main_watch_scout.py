@@ -24,43 +24,16 @@ EU_COUNTRY_MAP = {
     "EE": "Estonia 🇪🇪", "CY": "Cipro 🇨🇾", "MT": "Malta 🇲🇹"
 }
 
-#TARGET_REFERENCES = {
-#    "Rolex Datejust 41 (126333) Steel&Gold flutè": {
-#        "slug": "rolex/ref-126333.htm",
-#        "query": "126333",
-#        "min_price": 2000
-#    },
-#    "Rolex Datejust 41 (126334) Steel flutè": {
-#        "slug": "rolex/ref-126334.htm",
-#        "query": "126334",
-#        "min_price": 2000
-#    },
-#    "Rolex Datejust 41 (126300) Steel smooth": {
-#        "slug": "rolex/ref-126300.htm",
-#        "query": "126300",
-#        "min_price": 2000
-#    },
-#    "Cartier Santos Medium (WSSA0029) 35mm": {
-#        "slug": "cartier/ref-wssa0029.htm",
-#        "query": "WSSA0029",
-#        "min_price": 2000
-#    },
-#    "Cartier Santos 100 (2878) 33mm": {
-#        "slug": "cartier/ref-2878.htm",
-#        "query": "Cartier 2878",
-#        "min_price": 1000
-#    },
-#    "Tudor Black Bay (79220R) Smiley": {
-#        "slug": "tudor/ref-79220r.htm",
-#        "query": "79220R",
-#        "min_price": 1000
-#    },
-#    "Seiko Cement/Lunar (SRPG63K1)": {
-#        "slug": "seiko/ref-srpg63k1.htm",
-#        "query": "SRPG63K1",
-#        "min_price": 50
-#    }
-#}
+# NOTA per l'inserimento di nuovi orologi:
+# Chiave del dizionario ("Cartier Santos Medium (WSSA0029) 35mm"): nome descrittivo, solo per i tuoi log/report — puoi
+#                                                                scrivere quello che vuoi, non influisce sulla ricerca.
+# slug: il percorso URL della pagina di ricerca di quella referenza su Chrono24.it (tutto ciò che segue chrono24.it/).
+#       Va preso a mano dal sito: cerchi la referenza su chrono24.it, apri la pagina risultati per quel modello specifico,
+#       e copi il percorso dopo il dominio.
+# query: il termine usato per Subito.it ed eBay.it (tramite build_marketplace_query, che ci aggiunge automaticamente il
+#        marchio davanti se non c'è già). Di solito basta il codice referenza nudo.
+# min_price: soglia sotto la quale un annuncio viene scartato (per escludere accessori, cinturini sciolti, refurtive
+#            irrisorie, ecc. spacciate per l'orologio intero).
 
 TARGET_REFERENCES = {
     "Rolex Datejust 41 (126333) Steel&Gold flutè": {
@@ -68,17 +41,65 @@ TARGET_REFERENCES = {
         "query": "126333",
         "min_price": 2000
     },
+    "Rolex Datejust 41 (126334) Steel flutè": {
+        "slug": "rolex/ref-126334.htm",
+        "query": "126334",
+        "min_price": 2000
+    },
+    "Rolex Datejust 41 (126300) Steel smooth": {
+        "slug": "rolex/ref-126300.htm",
+        "query": "126300",
+        "min_price": 2000
+    },
+    "Cartier Santos Medium (WSSA0029) 35mm": {
+        "slug": "cartier/ref-wssa0029.htm",
+        "query": "WSSA0029",
+        "min_price": 2000
+    },
+    "Cartier Santos 100 (2878) 33mm": {
+        "slug": "cartier/ref-2878.htm",
+        "query": "Cartier 2878",
+        "min_price": 1000
+    },
+    "Omega Railmaster BLU Denim (220.10.40.20.03.001) 40mm": {
+    "slug": "omega/ref-22010402003001.htm",  #  https://www.chrono24.it/omega/ref-22010402003001.htm <-- verifica/correggi tu su chrono24.it
+    "query": "220.10.40.20.03.001",  # oppure: Omega Railmaster ?
+    "min_price": 2000
+    },
+    "Omega Railmaster NERO (220.10.40.20.01.001) 40mm": {
+    "slug": "omega/ref-22010402001001.htm",
+    "query": "220.10.40.20.01.001",
+    "min_price": 2000
+    },
     "Tudor Black Bay (79220R) Smiley": {
         "slug": "tudor/ref-79220r.htm",
         "query": "79220R",
         "min_price": 1000
     },
+    "Tudor Ranger (79950) 39": {
+        "slug": "tudor/ref-79950.htm",
+        "query": "79950",
+        "min_price": 500
+    },
     "Seiko Cement/Lunar (SRPG63K1)": {
         "slug": "seiko/ref-srpg63k1.htm",
         "query": "SRPG63K1",
         "min_price": 50
+    },
+    "Seiko 62MAS 6R35 (SPB143J1)": {
+        "slug": "seiko/ref-spb143j1.htm",
+        "query": "SPB143",
+        "min_price": 400
     }
 }
+
+#TARGET_REFERENCES = {
+#    "Tudor Black Bay (79220R) Smiley": {
+#        "slug": "tudor/ref-79220r.htm",
+#        "query": "79220R",
+#        "min_price": 1000
+#    }
+#}
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
