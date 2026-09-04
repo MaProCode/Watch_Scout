@@ -8,6 +8,12 @@ from curl_cffi import requests
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright
 
+
+# DIPENDENZE:
+# pip install playwright
+# python -m playwright install chromium
+
+
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("watch_scout")
 
@@ -27,10 +33,10 @@ EU_COUNTRY_MAP = {
 # NOTA per l'inserimento di nuovi orologi:
 # Chiave del dizionario ("Cartier Santos Medium (WSSA0029) 35mm"): nome descrittivo, solo per i tuoi log/report — puoi
 #                                                                scrivere quello che vuoi, non influisce sulla ricerca.
-# slug: il percorso URL della pagina di ricerca di quella referenza su Chrono24.it (tutto ciò che segue chrono24.it/).
+# slug: il percorso URL della pagina di ricerca di quella referenza su "CHRONO24.it" (tutto ciò che segue chrono24.it/).
 #       Va preso a mano dal sito: cerchi la referenza su chrono24.it, apri la pagina risultati per quel modello specifico,
 #       e copi il percorso dopo il dominio.
-# query: il termine usato per Subito.it ed eBay.it (tramite build_marketplace_query, che ci aggiunge automaticamente il
+# query: il termine usato per "SUBITO.it" ed "eBay.it" (tramite build_marketplace_query, che ci aggiunge automaticamente il
 #        marchio davanti se non c'è già). Di solito basta il codice referenza nudo.
 # min_price: soglia sotto la quale un annuncio viene scartato (per escludere accessori, cinturini sciolti, refurtive
 #            irrisorie, ecc. spacciate per l'orologio intero).
@@ -76,20 +82,40 @@ TARGET_REFERENCES = {
         "query": "79220R",
         "min_price": 1000
     },
-    "Tudor Ranger (79950) 39": {
+    "Tudor Ranger (79950) 39mm": {
         "slug": "tudor/ref-79950.htm",
         "query": "79950",
         "min_price": 500
     },
-    "Seiko Cement/Lunar (SRPG63K1)": {
+    "Seiko Cement/Lunar (SRPG63K1)40mm": {
         "slug": "seiko/ref-srpg63k1.htm",
         "query": "SRPG63K1",
         "min_price": 50
     },
-    "Seiko 62MAS 6R35 (SPB143J1)": {
+    "Seiko 62MAS 6R35 (SPB143J1) 1°Gen 20Atm Grigio 40mm": {
         "slug": "seiko/ref-spb143j1.htm",
         "query": "SPB143",
-        "min_price": 400
+        "min_price": 500
+    },
+    "Seiko 62MAS 6R55 (SPB453) 2°Gen 30Atm Nero 40mm": {
+        "slug": "seiko/ref-spb453j1.htm",
+        "query": "SPB453",
+        "min_price": 500
+    },
+    "Seiko Captain Willard 6R35 (SPB151) 20Atm Nero 42,7mm": {
+        "slug": "seiko/ref-spb151j1.htm",
+        "query": "SPB151",
+        "min_price": 700
+    },
+    "Seiko Captain Willard 6R35 (SPB183) 20Atm Blu (Lim.Edition 50°) 42,7mm": {
+        "slug": "seiko/ref-spb183j1.htm",
+        "query": "SPB183",
+        "min_price": 700
+    },
+    "Doxa Sub 300T WhitePearl (840.10.011.23) 120Atm Bianco 44mm": {
+        "slug": "doxa/ref-8401001123.htm", # "https://www.chrono24.it/search/index.htm?dosearch=true&query=Doxa+sub+300t+whitepearl",
+        "query": "Doxa sub 300t",
+        "min_price": 700
     }
 }
 
@@ -1203,7 +1229,7 @@ def run_watch_scanner():
         }
 
         print(
-            f"  -> Estratti {len(chrono_items)} su Chrono24, "
+            f"          -> Estratti {len(chrono_items)} su Chrono24, "
             f"{len(subito_items)} su Subito.it, "
             f"{len(ebay_items)} su eBay.it e "
             f"{len(vinted_items)} su Vinted."
@@ -1238,7 +1264,7 @@ if __name__ == "__main__":
         if items:
             for idx, item in enumerate(items, 1):
                 print(
-                    f"{idx:02d}. [{item['piattaforma']}] {item['modello']} | "
+                    f"{idx:02d}. [{item['piattaforma']}] | "   # f"{idx:02d}. [{item['piattaforma']}] {item['modello']} | "
                     f"Prezzo: {item['prezzo_str']} | Paese: {item['paese']} | "
                     f"Venditore: {item['tipo_venditore']} | Anno: {item['anno']} | "
                     f"Quadrante: {item['quadrante']} | Dotazione: {item['dotazione']} | \n        Link: {item['link']}"
