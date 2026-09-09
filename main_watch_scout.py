@@ -354,7 +354,7 @@ def extract_chrono24_country(card_text, item=None):
 
     # Codici UE / paesi della nostra mappa.
     country_codes = "|".join(
-        re.escape(code) for code in EU_COUNTRY_MAP.keys()
+        re.escape(code) for code in ALL_COUNTRY_MAP.keys()
     )
 
     # Esempi intercettati:
@@ -587,13 +587,13 @@ def fetch_chrono24(session, ref_name, info):
                         else url_path
                     )
 
-                    #country = html_country_by_link.get(
-                    #    link.split("?")[0],
-                    #    extract_chrono24_country(
-                    #        card_text="",
-                    #        item=item
-                    #    )
-                    #)
+                    country = html_country_by_link.get(
+                        link.split("?")[0],
+                        extract_chrono24_country(
+                            card_text="",
+                            item=item
+                        )
+                    )
 
                     seller_obj = item.get("seller", {}) or {}
                     country = extract_chrono24_country(
