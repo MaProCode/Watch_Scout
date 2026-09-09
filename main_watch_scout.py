@@ -41,91 +41,92 @@ EU_COUNTRY_MAP = {
 # min_price: soglia sotto la quale un annuncio viene scartato (per escludere accessori, cinturini sciolti, refurtive
 #            irrisorie, ecc. spacciate per l'orologio intero).
 
-TARGET_REFERENCES = {
-    "Rolex Datejust 41 (126333) Steel&Gold flutè": {
-        "slug": "rolex/ref-126333.htm",
-        "query": "126333",
+if 0:
+    TARGET_REFERENCES = {
+        "Rolex Datejust 41 (126333) Steel&Gold flutè": {
+            "slug": "rolex/ref-126333.htm",
+            "query": "126333",
+            "min_price": 2000
+        },
+        "Rolex Datejust 41 (126334) Steel flutè": {
+            "slug": "rolex/ref-126334.htm",
+            "query": "126334",
+            "min_price": 2000
+        },
+        "Rolex Datejust 41 (126300) Steel smooth": {
+            "slug": "rolex/ref-126300.htm",
+            "query": "126300",
+            "min_price": 2000
+        },
+        "Cartier Santos Medium (WSSA0029) 35mm": {
+            "slug": "cartier/ref-wssa0029.htm",
+            "query": "WSSA0029",
+            "min_price": 2000
+        },
+        "Cartier Santos 100 (2878) 33mm": {
+            "slug": "cartier/ref-2878.htm",
+            "query": "Cartier 2878",
+            "min_price": 1000
+        },
+        "Omega Railmaster BLU Denim (220.10.40.20.03.001) 40mm": {
+        "slug": "omega/ref-22010402003001.htm",  #  https://www.chrono24.it/omega/ref-22010402003001.htm <-- verifica/correggi tu su chrono24.it
+        "query": "220.10.40.20.03.001",  # oppure: Omega Railmaster ?
         "min_price": 2000
-    },
-    "Rolex Datejust 41 (126334) Steel flutè": {
-        "slug": "rolex/ref-126334.htm",
-        "query": "126334",
+        },
+        "Omega Railmaster NERO (220.10.40.20.01.001) 40mm": {
+        "slug": "omega/ref-22010402001001.htm",
+        "query": "220.10.40.20.01.001",
         "min_price": 2000
-    },
-    "Rolex Datejust 41 (126300) Steel smooth": {
-        "slug": "rolex/ref-126300.htm",
-        "query": "126300",
-        "min_price": 2000
-    },
-    "Cartier Santos Medium (WSSA0029) 35mm": {
-        "slug": "cartier/ref-wssa0029.htm",
-        "query": "WSSA0029",
-        "min_price": 2000
-    },
-    "Cartier Santos 100 (2878) 33mm": {
-        "slug": "cartier/ref-2878.htm",
-        "query": "Cartier 2878",
-        "min_price": 1000
-    },
-    "Omega Railmaster BLU Denim (220.10.40.20.03.001) 40mm": {
-    "slug": "omega/ref-22010402003001.htm",  #  https://www.chrono24.it/omega/ref-22010402003001.htm <-- verifica/correggi tu su chrono24.it
-    "query": "220.10.40.20.03.001",  # oppure: Omega Railmaster ?
-    "min_price": 2000
-    },
-    "Omega Railmaster NERO (220.10.40.20.01.001) 40mm": {
-    "slug": "omega/ref-22010402001001.htm",
-    "query": "220.10.40.20.01.001",
-    "min_price": 2000
-    },
-    "Tudor Black Bay (79220R) Smiley": {
-        "slug": "tudor/ref-79220r.htm",
-        "query": "79220R",
-        "min_price": 1000
-    },
-    "Tudor Ranger (79950) 39mm": {
-        "slug": "tudor/ref-79950.htm",
-        "query": "79950",
-        "min_price": 500
-    },
-    "Seiko Cement/Lunar (SRPG63K1)40mm": {
-        "slug": "seiko/ref-srpg63k1.htm",
-        "query": "SRPG63K1",
-        "min_price": 50
-    },
-    "Seiko 62MAS 6R35 (SPB143J1) 1°Gen 20Atm Grigio 40mm": {
-        "slug": "seiko/ref-spb143j1.htm",
-        "query": "SPB143",
-        "min_price": 500
-    },
-    "Seiko 62MAS 6R55 (SPB453) 2°Gen 30Atm Nero 40mm": {
-        "slug": "seiko/ref-spb453j1.htm",
-        "query": "SPB453",
-        "min_price": 500
-    },
-    "Seiko Captain Willard 6R35 (SPB151) 20Atm Nero 42,7mm": {
-        "slug": "seiko/ref-spb151j1.htm",
-        "query": "SPB151",
-        "min_price": 700
-    },
-    "Seiko Captain Willard 6R35 (SPB183) 20Atm Blu (Lim.Edition 50°) 42,7mm": {
-        "slug": "seiko/ref-spb183j1.htm",
-        "query": "SPB183",
-        "min_price": 700
-    },
-    "Doxa Sub 300T WhitePearl (840.10.011.23) 120Atm Bianco 44mm": {
-        "slug": "doxa/ref-8401001123.htm", # "https://www.chrono24.it/search/index.htm?dosearch=true&query=Doxa+sub+300t+whitepearl",
-        "query": "Doxa sub 300t",
-        "min_price": 700
+        },
+        "Tudor Black Bay (79220R) Smiley": {
+            "slug": "tudor/ref-79220r.htm",
+            "query": "79220R",
+            "min_price": 1000
+        },
+        "Tudor Ranger (79950) 39mm": {
+            "slug": "tudor/ref-79950.htm",
+            "query": "79950",
+            "min_price": 500
+        },
+        "Seiko Cement/Lunar (SRPG63K1)40mm": {
+            "slug": "seiko/ref-srpg63k1.htm",
+            "query": "SRPG63K1",
+            "min_price": 50
+        },
+        "Seiko 62MAS 6R35 (SPB143J1) 1°Gen 20Atm Grigio 40mm": {
+            "slug": "seiko/ref-spb143j1.htm",
+            "query": "SPB143",
+            "min_price": 500
+        },
+        "Seiko 62MAS 6R55 (SPB453) 2°Gen 30Atm Nero 40mm": {
+            "slug": "seiko/ref-spb453j1.htm",
+            "query": "SPB453",
+            "min_price": 500
+        },
+        "Seiko Captain Willard 6R35 (SPB151) 20Atm Nero 42,7mm": {
+            "slug": "seiko/ref-spb151j1.htm",
+            "query": "SPB151",
+            "min_price": 700
+        },
+        "Seiko Captain Willard 6R35 (SPB183) 20Atm Blu (Lim.Edition 50°) 42,7mm": {
+            "slug": "seiko/ref-spb183j1.htm",
+            "query": "SPB183",
+            "min_price": 700
+        },
+        "Doxa Sub 300T WhitePearl (840.10.011.23) 120Atm Bianco 44mm": {
+            "slug": "doxa/ref-8401001123.htm", # "https://www.chrono24.it/search/index.htm?dosearch=true&query=Doxa+sub+300t+whitepearl",
+            "query": "Doxa sub 300t",
+            "min_price": 700
+        }
     }
-}
-
-#TARGET_REFERENCES = {
-#    "Tudor Black Bay (79220R) Smiley": {
-#        "slug": "tudor/ref-79220r.htm",
-#        "query": "79220R",
-#        "min_price": 1000
-#    }
-#}
+else:
+    TARGET_REFERENCES = {
+        "Omega Railmaster BLU Denim (220.10.40.20.03.001) 40mm": {
+        "slug": "omega/ref-22010402003001.htm",  #  https://www.chrono24.it/omega/ref-22010402003001.htm <-- verifica/correggi tu su chrono24.it
+        "query": "220.10.40.20.03.001",  # oppure: Omega Railmaster ?
+        "min_price": 2000
+        },
+    }
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -159,16 +160,140 @@ def calculate_discount_format(price_val, average_price):
         return f"{price_formatted} (0%)"
 
 
+
 def extract_country_name(country_code_or_text):
-    code = str(country_code_or_text).upper().strip()
+    """
+    Ricava il paese da un codice ISO o da un nome di paese.
+    Non usa più match per sottostringa e non assegna Italia come default.
+    """
+    if country_code_or_text is None:
+        return "N/D"
+
+    text = str(country_code_or_text).strip()
+    if not text:
+        return "N/D"
+
+    # Caso ISO: "IT", "DE", ...
+    code = text.upper()
     if code in EU_COUNTRY_MAP:
         return EU_COUNTRY_MAP[code]
 
-    for c_code, c_name in EU_COUNTRY_MAP.items():
-        if c_code in code or c_name.split()[0].lower() in code.lower():
-            return c_name
+    # Normalizzazione per il confronto dei nomi
+    normalized = code.lower()
 
-    return "Italia 🇮🇹"
+    country_names = {
+        "italia": "IT",
+        "italy": "IT",
+        "germania": "DE",
+        "germany": "DE",
+        "deutschland": "DE",
+        "francia": "FR",
+        "france": "FR",
+        "spagna": "ES",
+        "spain": "ES",
+        "españa": "ES",
+        "olanda": "NL",
+        "netherlands": "NL",
+        "paesi bassi": "NL",
+        "belgio": "BE",
+        "belgium": "BE",
+        "austria": "AT",
+        "grecia": "GR",
+        "greece": "GR",
+        "portogallo": "PT",
+        "portugal": "PT",
+        "polonia": "PL",
+        "poland": "PL",
+        "svezia": "SE",
+        "sweden": "SE",
+        "danimarca": "DK",
+        "denmark": "DK",
+        "finlandia": "FI",
+        "finland": "FI",
+        "rep. ceca": "CZ",
+        "czech republic": "CZ",
+        "cechia": "CZ",
+        "ungheria": "HU",
+        "hungary": "HU",
+        "irlanda": "IE",
+        "ireland": "IE",
+        "lussemburgo": "LU",
+        "luxembourg": "LU",
+        "croazia": "HR",
+        "croatia": "HR",
+        "slovenia": "SI",
+        "slovacchia": "SK",
+        "slovakia": "SK",
+        "romania": "RO",
+        "bulgaria": "BG",
+        "lituania": "LT",
+        "lithuania": "LT",
+        "lettonia": "LV",
+        "latvia": "LV",
+        "estonia": "EE",
+        "cypre": "CY",
+        "cyprus": "CY",
+        "cipro": "CY",
+        "malta": "MT"
+    }
+
+    # Prima cerca una corrispondenza esatta.
+    if normalized in country_names:
+        return EU_COUNTRY_MAP[country_names[normalized]]
+
+    # Solo se abbiamo una stringa geografica esplicita, ad esempio:
+    # "Bietigheim-Bissingen, Germany"
+    # cerchiamo il nome completo del paese come parola/frase autonoma,
+    # non il codice ISO come sottostringa arbitraria.
+    for country_name, country_code in sorted(
+        country_names.items(),
+        key=lambda x: len(x[0]),
+        reverse=True
+    ):
+        pattern = rf"(?<![a-zA-ZÀ-ÿ]){re.escape(country_name)}(?![a-zA-ZÀ-ÿ])"
+        if re.search(pattern, normalized):
+            return EU_COUNTRY_MAP[country_code]
+
+    return "N/D"
+
+
+def extract_chrono24_country(item):
+    """
+    Estrae il paese dell'annuncio Chrono24 dando priorità ai dati strutturati
+    del venditore e della località.
+    """
+    seller = item.get("seller") or {}
+
+    candidates = [
+        seller.get("countryCode"),
+        seller.get("country"),
+        seller.get("location"),
+        seller.get("address"),
+        item.get("countryCode"),
+        item.get("country"),
+        item.get("shippingCountry"),
+        item.get("location"),
+        item.get("address"),
+    ]
+
+    print("DEBUG CHRONO24 COUNTRY:", candidates)  # Debug
+
+    # Gestisce anche strutture annidate tipo:
+    # {"location": {"countryCode": "DE", "country": "Germany"}}
+    for candidate in candidates:
+        if isinstance(candidate, dict):
+            for key in ("countryCode", "country", "name", "location"):
+                value = candidate.get(key)
+                if value:
+                    country = extract_country_name(value)
+                    if country != "N/D":
+                        return country
+        elif candidate:
+            country = extract_country_name(candidate)
+            if country != "N/D":
+                return country
+
+    return "N/D"
 
 
 def extract_year(text):
@@ -335,17 +460,13 @@ def fetch_chrono24(session, ref_name, info):
                     )
 
                     seller_obj = item.get("seller", {}) or {}
-                    raw_country = (
-                        seller_obj.get("country")
-                        or item.get("country")
-                        or item.get("shippingCountry")
-                    )
+                    country = extract_chrono24_country(item)
 
                     parsed_listings.append({
                         "piattaforma": "Chrono24",
                         "modello": ref_name,
                         "prezzo_val": price_val,
-                        "paese": extract_country_name(raw_country),
+                        "paese": country,
                         "tipo_venditore": extract_seller_type(
                             item.get("isProfessional")
                             or seller_obj.get("isProfessional")
@@ -405,7 +526,7 @@ def fetch_chrono24(session, ref_name, info):
                 "piattaforma": "Chrono24",
                 "modello": ref_name,
                 "prezzo_val": price_val,
-                "paese": extract_country_name(text_content),
+                "paese": "N/D",
                 "tipo_venditore": extract_seller_type(text_content),
                 "anno": extract_year(text_content),
                 "quadrante": extract_dial_color(text_content),
