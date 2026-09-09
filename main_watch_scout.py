@@ -257,41 +257,100 @@ def extract_country_name(country_code_or_text):
     return "N/D"
 
 
-def extract_chrono24_country(item):
+def extract_chrono24_country(card_text, item=None):
     """
-    Estrae il paese dell'annuncio Chrono24 dando priorità ai dati strutturati
-    del venditore e della località.
-    """
-    seller = item.get("seller") or {}
+    Estrae il paese dell'annuncio Chrono24.
 
-    candidates = [
-        seller.get("countryCode"),
-        seller.get("country"),
-        seller.get("location"),
-        seller.get("address"),
-        item.get("countryCode"),
-        item.get("country"),
-        item.get("shippingCountry"),
-        item.get("location"),
-        item.get("address"),
+    Chrono24 visualizza nella card della ricerca il codice ISO del paese
+    dell'annuncio, tipicamente subito dopo le informazioni di spedizione:
+        "... 11.111 € ... DE"
+        "... 11.105 € ... HK"
+
+    Prima prova il dato strutturato dell'item, poi il testo della card.
+    """
+    # ---------------------------------------------------------
+    # 1) Dati strutturati, se disponibili
+    # ---------------------------------------------------------
+    if isinstance(item, dict):
+        seller = item.get("seller") or {}
+
+        candidates = [
+            seller.get("countryCode"),
+            seller.get("country"),
+            seller.get("location"),
+            seller.get("address"),
+            item.get("countryCode"),
+            item.get("country"),
+            item.get("shippingCountry"),
+            item.get("location"),
+            item.get("address"),
+        ]
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+
+            if isinstance(candidate, dict):
+                for key in (
+                    "countryCode",
+                    "country",
+                    "name",
+                    "location"
+                ):
+                    value = candidate.get(key)
+                    if value:
+                        country = extract_country_name(value)
+                        if country != "N/D":
+                            return country
+            else:
+                country = extract_country_name(candidate)
+                if country != "N/D":
+                    return country
+
+    # ---------------------------------------------------------
+    # 2) Parsing del testo della card HTML
+    # ---------------------------------------------------------
+    text = re.sub(r"\s+", " ", str(card_text)).strip()
+
+    print("DEBUG COUNTRY INPUT:", repr(text[:500]))
+
+    if not text:
+        return "N/D"
+
+    # Codici UE / paesi della nostra mappa.
+    country_codes = "|".join(
+        re.escape(code) for code in EU_COUNTRY_MAP.keys()
+    )
+
+    # Esempi intercettati:
+    #   "11.111 € ... DE"
+    #   "12.000 € ... FR Certified"
+    #   "11.995 € Spedizione gratuita JP"
+    #
+    # Il codice viene cercato subito dopo una zona legata al prezzo/
+    # spedizione, evitando quindi match casuali come "IT" dentro parole.
+    patterns = [
+        rf"(?:Spese di spedizione escluse|Spedizione gratuita|\+\s*[\d\.,]+\s*€)[^A-Z]{{0,60}}\b({country_codes})\b",
+        rf"€[^A-Z]{{0,60}}\b({country_codes})\b",
     ]
 
-    print("DEBUG CHRONO24 COUNTRY:", candidates)  # Debug
+    for pattern in patterns:
+        match = re.search(pattern, text, flags=re.IGNORECASE)
+        if match:
+            country_code = match.group(1).upper()
+            country = EU_COUNTRY_MAP.get(country_code, "N/D")
+            print(f"DEBUG COUNTRY MATCH: {country_code} -> {country}")
+            return country
 
-    # Gestisce anche strutture annidate tipo:
-    # {"location": {"countryCode": "DE", "country": "Germany"}}
-    for candidate in candidates:
-        if isinstance(candidate, dict):
-            for key in ("countryCode", "country", "name", "location"):
-                value = candidate.get(key)
-                if value:
-                    country = extract_country_name(value)
-                    if country != "N/D":
-                        return country
-        elif candidate:
-            country = extract_country_name(candidate)
-            if country != "N/D":
-                return country
+    # ---------------------------------------------------------
+    # 3) Debug: mostra il testo della card solo se non troviamo
+    #    il paese. Questo ci permette di adattare il parser
+    #    alla struttura reale di Chrono24.
+    # ---------------------------------------------------------
+    print(
+        "DEBUG CHRONO24 COUNTRY NOT FOUND:",
+        repr(text[:500])
+    )
 
     return "N/D"
 
@@ -419,6 +478,40 @@ def fetch_chrono24(session, ref_name, info):
         parsed_average = None
         soup = BeautifulSoup(html_content, "html.parser")
 
+        html_country_by_link = {}
+
+        # Chrono24 mostra il paese direttamente nelle card HTML.
+        # Creiamo una mappa:
+        #     URL annuncio -> paese
+        #
+        # Esempio:
+        #     "... 12.000 € ... DE ..." -> Germania
+        for link_tag in soup.find_all("a", href=re.compile(r"-id\d+\.htm")):
+            href = link_tag.get("href", "")
+            if not href:
+                continue
+
+            full_link = (
+                f"https://www.chrono24.it{href}"
+                if href.startswith("/")
+                else href
+            )
+
+            container = link_tag.find_parent(["article", "div"])
+            if not container:
+                continue
+
+            card_text = container.get_text(" ", strip=True)
+
+            country = extract_chrono24_country(
+                card_text=card_text,
+                item=None
+            )
+
+            if country != "N/D":
+                html_country_by_link[full_link.split("?")[0]] = country
+
+
         # Percorso strutturato: __NEXT_DATA__
         script_json = soup.find("script", id="__NEXT_DATA__")
         if script_json:
@@ -459,8 +552,21 @@ def fetch_chrono24(session, ref_name, info):
                         else url_path
                     )
 
+                    #country = html_country_by_link.get(
+                    #    link.split("?")[0],
+                    #    extract_chrono24_country(
+                    #        card_text="",
+                    #        item=item
+                    #    )
+                    #)
+
                     seller_obj = item.get("seller", {}) or {}
-                    country = extract_chrono24_country(item)
+                    country = extract_chrono24_country(
+                        card_text=full_text,
+                        item=item
+                    )
+
+                    print(f"DEBUG CHRONO24 COUNTRY: {country} | {link}")
 
                     parsed_listings.append({
                         "piattaforma": "Chrono24",
