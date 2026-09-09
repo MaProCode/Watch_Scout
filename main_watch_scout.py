@@ -30,6 +30,23 @@ EU_COUNTRY_MAP = {
     "EE": "Estonia 🇪🇪", "CY": "Cipro 🇨🇾", "MT": "Malta 🇲🇹"
 }
 
+
+# Codici Paese extra-UE più comuni nelle spedizioni internazionali su Chrono24
+NON_EU_COUNTRY_MAP = {
+    "HK": "Hong Kong 🇭🇰", "JP": "Giappone 🇯🇵", "US": "Stati Uniti 🇺🇸",
+    "CH": "Svizzera 🇨🇭", "CA": "Canada 🇨🇦", "GB": "Regno Unito 🇬🇧",
+    "UK": "Regno Unito 🇬🇧", "AU": "Australia 🇦🇺", "CN": "Cina 🇨🇳",
+    "KR": "Corea del Sud 🇰🇷", "SG": "Singapore 🇸🇬", "TW": "Taiwan 🇹🇼",
+    "TH": "Thailandia 🇹🇭", "AE": "Emirati Arabi 🇦🇪", "IL": "Israele 🇮🇱",
+    "NO": "Norvegia 🇳🇴", "TR": "Turchia 🇹🇷", "MX": "Messico 🇲🇽",
+    "BR": "Brasile 🇧🇷", "IN": "India 🇮🇳", "NZ": "Nuova Zelanda 🇳🇿"
+}
+
+ALL_COUNTRY_MAP = {**EU_COUNTRY_MAP, **NON_EU_COUNTRY_MAP}
+COUNTRY_CODE_PATTERN = re.compile(r"\b(" + "|".join(ALL_COUNTRY_MAP.keys()) + r")\b")
+
+
+
 # NOTA per l'inserimento di nuovi orologi:
 # Chiave del dizionario ("Cartier Santos Medium (WSSA0029) 35mm"): nome descrittivo, solo per i tuoi log/report — puoi
 #                                                                scrivere quello che vuoi, non influisce sulla ricerca.
@@ -161,98 +178,116 @@ def calculate_discount_format(price_val, average_price):
 
 
 
+#def extract_country_name(country_code_or_text):
+#    """
+#    Ricava il paese da un codice ISO o da un nome di paese.
+#    Non usa più match per sottostringa e non assegna Italia come default.
+#    """
+#    if country_code_or_text is None:
+#        return "N/D"
+#
+#    text = str(country_code_or_text).strip()
+#    if not text:
+#        return "N/D"
+#
+#    # Caso ISO: "IT", "DE", ...
+#    code = text.upper()
+#    if code in EU_COUNTRY_MAP:
+#        return EU_COUNTRY_MAP[code]
+#
+#    # Normalizzazione per il confronto dei nomi
+#    normalized = code.lower()
+#
+#    country_names = {
+#        "italia": "IT",
+#        "italy": "IT",
+#        "germania": "DE",
+#        "germany": "DE",
+#        "deutschland": "DE",
+#        "francia": "FR",
+#        "france": "FR",
+#        "spagna": "ES",
+#        "spain": "ES",
+#        "españa": "ES",
+#        "olanda": "NL",
+#        "netherlands": "NL",
+#        "paesi bassi": "NL",
+#        "belgio": "BE",
+#        "belgium": "BE",
+#        "austria": "AT",
+#        "grecia": "GR",
+#        "greece": "GR",
+#        "portogallo": "PT",
+#        "portugal": "PT",
+#        "polonia": "PL",
+#        "poland": "PL",
+#        "svezia": "SE",
+#        "sweden": "SE",
+#        "danimarca": "DK",
+#        "denmark": "DK",
+#        "finlandia": "FI",
+#        "finland": "FI",
+#        "rep. ceca": "CZ",
+#        "czech republic": "CZ",
+#        "cechia": "CZ",
+#        "ungheria": "HU",
+#        "hungary": "HU",
+#        "irlanda": "IE",
+#        "ireland": "IE",
+#        "lussemburgo": "LU",
+#        "luxembourg": "LU",
+#        "croazia": "HR",
+#        "croatia": "HR",
+#        "slovenia": "SI",
+#        "slovacchia": "SK",
+#        "slovakia": "SK",
+#        "romania": "RO",
+#        "bulgaria": "BG",
+#        "lituania": "LT",
+#        "lithuania": "LT",
+#        "lettonia": "LV",
+#        "latvia": "LV",
+#        "estonia": "EE",
+#        "cypre": "CY",
+#        "cyprus": "CY",
+#        "cipro": "CY",
+#        "malta": "MT"
+#    }
+#
+#    # Prima cerca una corrispondenza esatta.
+#    if normalized in country_names:
+#        return EU_COUNTRY_MAP[country_names[normalized]]
+#
+#    # Solo se abbiamo una stringa geografica esplicita, ad esempio:
+#    # "Bietigheim-Bissingen, Germany"
+#    # cerchiamo il nome completo del paese come parola/frase autonoma,
+#    # non il codice ISO come sottostringa arbitraria.
+#    for country_name, country_code in sorted(
+#        country_names.items(),
+#        key=lambda x: len(x[0]),
+#        reverse=True
+#    ):
+#        pattern = rf"(?<![a-zA-ZÀ-ÿ]){re.escape(country_name)}(?![a-zA-ZÀ-ÿ])"
+#        if re.search(pattern, normalized):
+#            return EU_COUNTRY_MAP[country_code]
+#
+#    return "N/D"
+
+
 def extract_country_name(country_code_or_text):
-    """
-    Ricava il paese da un codice ISO o da un nome di paese.
-    Non usa più match per sottostringa e non assegna Italia come default.
-    """
-    if country_code_or_text is None:
-        return "N/D"
+    text = str(country_code_or_text).upper().strip()
 
-    text = str(country_code_or_text).strip()
-    if not text:
-        return "N/D"
+    # Caso 1: arriva già come codice ISO pulito (es. dal ramo JSON strutturato)
+    if text in ALL_COUNTRY_MAP:
+        return ALL_COUNTRY_MAP[text]
 
-    # Caso ISO: "IT", "DE", ...
-    code = text.upper()
-    if code in EU_COUNTRY_MAP:
-        return EU_COUNTRY_MAP[code]
-
-    # Normalizzazione per il confronto dei nomi
-    normalized = code.lower()
-
-    country_names = {
-        "italia": "IT",
-        "italy": "IT",
-        "germania": "DE",
-        "germany": "DE",
-        "deutschland": "DE",
-        "francia": "FR",
-        "france": "FR",
-        "spagna": "ES",
-        "spain": "ES",
-        "españa": "ES",
-        "olanda": "NL",
-        "netherlands": "NL",
-        "paesi bassi": "NL",
-        "belgio": "BE",
-        "belgium": "BE",
-        "austria": "AT",
-        "grecia": "GR",
-        "greece": "GR",
-        "portogallo": "PT",
-        "portugal": "PT",
-        "polonia": "PL",
-        "poland": "PL",
-        "svezia": "SE",
-        "sweden": "SE",
-        "danimarca": "DK",
-        "denmark": "DK",
-        "finlandia": "FI",
-        "finland": "FI",
-        "rep. ceca": "CZ",
-        "czech republic": "CZ",
-        "cechia": "CZ",
-        "ungheria": "HU",
-        "hungary": "HU",
-        "irlanda": "IE",
-        "ireland": "IE",
-        "lussemburgo": "LU",
-        "luxembourg": "LU",
-        "croazia": "HR",
-        "croatia": "HR",
-        "slovenia": "SI",
-        "slovacchia": "SK",
-        "slovakia": "SK",
-        "romania": "RO",
-        "bulgaria": "BG",
-        "lituania": "LT",
-        "lithuania": "LT",
-        "lettonia": "LV",
-        "latvia": "LV",
-        "estonia": "EE",
-        "cypre": "CY",
-        "cyprus": "CY",
-        "cipro": "CY",
-        "malta": "MT"
-    }
-
-    # Prima cerca una corrispondenza esatta.
-    if normalized in country_names:
-        return EU_COUNTRY_MAP[country_names[normalized]]
-
-    # Solo se abbiamo una stringa geografica esplicita, ad esempio:
-    # "Bietigheim-Bissingen, Germany"
-    # cerchiamo il nome completo del paese come parola/frase autonoma,
-    # non il codice ISO come sottostringa arbitraria.
-    for country_name, country_code in sorted(
-        country_names.items(),
-        key=lambda x: len(x[0]),
-        reverse=True
-    ):
-        pattern = rf"(?<![a-zA-ZÀ-ÿ]){re.escape(country_name)}(?![a-zA-ZÀ-ÿ])"
-        if re.search(pattern, normalized):
-            return EU_COUNTRY_MAP[country_code]
+    # Caso 2: blob di testo (fallback HTML) - il codice Paese compare sempre
+    # vicino alla fine, dopo prezzo/spese di spedizione. Prendiamo l'ULTIMA
+    # occorrenza isolata (word boundary), non una substring qualsiasi:
+    # evita falsi positivi tipo "DE" dentro "DENIM".
+    matches = COUNTRY_CODE_PATTERN.findall(text)
+    if matches:
+        return ALL_COUNTRY_MAP[matches[-1]]
 
     return "N/D"
 
